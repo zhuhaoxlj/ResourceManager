@@ -1,0 +1,38 @@
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, BigInteger
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from app.models.database import Base
+
+
+class Resource(Base):
+    """资源模型"""
+
+    __tablename__ = "resources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    platform = Column(String(50), nullable=False, index=True)
+    category = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    cover_image = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # 关联版本
+    versions = relationship("Version", back_populates="resource", cascade="all, delete-orphan")
+
+
+class Version(Base):
+    """版本模型"""
+
+    __tablename__ = "versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    resource_id = Column(Integer, ForeignKey("resources.id"), nullable=False)
+    version = Column(String(100), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(BigInteger, nullable=True)
+    upload_date = Column(DateTime(timezone=True), server_default=func.now())
+
+    # 关联资源
+    resource = relationship("Resource", back_populates="versions")
