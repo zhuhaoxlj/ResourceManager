@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resource-manager-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # 资源目录（从 .env 读取）
+      - ${NAS_RESOURCE_PATH}:/app/resources
+      # 数据持久化
+      - ./data/db:/app/data
+      # 上传文件目录
+      - ./data/uploads:/app/uploads
+    environment:
+      - RESOURCE_DIR=/app/resources
+      - UPLOAD_DIR=/app/uploads
+      - DATABASE_URL=sqlite:///./data/resources.db
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - FRONTEND_URL=http://localhost:5173
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: resource-manager-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  upload_data:
