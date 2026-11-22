@@ -32,6 +32,9 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
   const isAndroid = resource.platform === "android"
   const isMac = resource.platform === "mac"
   const isAppIcon = !!icon && (isAndroid || isMac)
+  const platformLabel =
+    { android: "Android", mac: "macOS", windows: "Windows", switch: "Switch" }[resource.platform] ||
+    resource.platform
   const versionText = resource.app_version || latestVersion?.version
 
   return (
@@ -69,7 +72,7 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
           {resource.name}
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-          {resource.category || (resource.package_name ? "Android 应用" : "未分类")}
+          {resource.category || (resource.package_name ? `${platformLabel} 应用` : "未分类")}
         </p>
         {latestVersion && (
           <p className="text-[11px] text-muted-foreground mt-1 truncate">
