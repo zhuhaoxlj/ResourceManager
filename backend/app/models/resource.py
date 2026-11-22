@@ -15,6 +15,14 @@ class Resource(Base):
     category = Column(String(100), nullable=True)
     description = Column(Text, nullable=True)
     cover_image = Column(String(500), nullable=True)
+    # APK 解析出来的应用信息
+    package_name = Column(String(255), nullable=True, index=True)
+    app_version = Column(String(50), nullable=True)
+    version_code = Column(String(50), nullable=True)
+    min_sdk = Column(String(20), nullable=True)
+    target_sdk = Column(String(20), nullable=True)
+    architectures = Column(String(100), nullable=True)
+    permissions_count = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

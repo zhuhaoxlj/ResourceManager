@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
-from pathlib import Path
 from app.models.database import get_db
 from app.models.resource import Resource, Version
 from app.services.file_manager import file_manager
@@ -19,43 +18,17 @@ async def upload_file(
     # 保存文件
     relative_path, file_size = await file_manager.save_upload_file(file, platform)
 
-    # 提取资源信息
+    # 登记资源（APK 会自动解析应用名、版本、图标等信息）
     scanner = DirectoryScanner(file_manager.resource_dir)
-    resource_name = scanner.extract_resource_name(file.filename, platform)
-    version = scanner.extract_version(file.filename)
-
-    # 查找或创建资源
-    resource = (
-        db.query(Resource)
-        .filter(Resource.name == resource_name, Resource.platform == platform)
-        .first()
-    )
-
-    if not resource:
-        resource = Resource(name=resource_name, platform=platform)
-        db.add(resource)
-        db.flush()
-
-    # 检查版本是否存在
-    existing_version = (
-        db.query(Version)
-        .filter(Version.resource_id == resource.id, Version.version == version)
-        .first()
-    )
-
-    if not existing_version:
-        version_record = Version(
-            resource_id=resource.id,
-            version=version,
-            file_path=relative_path,
-            file_size=file_size,
-        )
-        db.add(version_record)
+    absolute_path = file_manager.resource_dir / relative_path
+    scanner.index_file(db, absolute_path, relative_path)
 
     db.commit()
-    db.refresh(resource)
 
-    return {"message": "上传成功", "resource_id": resource.id}
+    version_record = db.query(Version).filter(Version.file_path == relative_path).first()
+    resource_id = version_record.resource_id if version_record else None
+
+    return {"message": "上传成功", "resource_id": resource_id}
 
 
 @router.post("/cover/{resource_id}")

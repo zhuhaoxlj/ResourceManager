@@ -1,25 +1,5 @@
 import { create } from "zustand"
-import { api } from "@/services/api"
-
-interface Resource {
-  id: number
-  name: string
-  platform: string
-  category?: string
-  description?: string
-  cover_image?: string
-  created_at: string
-  updated_at?: string
-  versions: Version[]
-}
-
-interface Version {
-  id: number
-  version: string
-  file_path: string
-  file_size?: number
-  upload_date: string
-}
+import { api, type Resource } from "@/services/api"
 
 interface ResourceStore {
   resources: Resource[]

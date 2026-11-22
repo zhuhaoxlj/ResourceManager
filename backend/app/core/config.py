@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        # .env 里可能有留给 compose 的变量（如 DATA_PATH），不当作配置错误
+        extra = "ignore"
 
 
 @lru_cache()

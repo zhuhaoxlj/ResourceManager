@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import Optional, List
-from pathlib import Path
 from app.models.database import get_db
 from app.models.resource import Resource, Version
 from app.core.config import settings
@@ -42,6 +42,13 @@ def _enrich_resource(resource: Resource) -> dict:
         "category": resource.category,
         "description": resource.description,
         "cover_image": resource.cover_image,
+        "package_name": resource.package_name,
+        "app_version": resource.app_version,
+        "version_code": resource.version_code,
+        "min_sdk": resource.min_sdk,
+        "target_sdk": resource.target_sdk,
+        "architectures": resource.architectures,
+        "permissions_count": resource.permissions_count,
         "created_at": resource.created_at,
         "updated_at": resource.updated_at,
         "versions": _add_full_paths(resource.versions),
@@ -66,7 +73,12 @@ def get_resources(
     if category:
         query = query.filter(Resource.category == category)
     if search:
-        query = query.filter(Resource.name.contains(search))
+        query = query.filter(
+            or_(
+                Resource.name.contains(search),
+                Resource.package_name.contains(search),
+            )
+        )
 
     # 总数
     total = query.count()

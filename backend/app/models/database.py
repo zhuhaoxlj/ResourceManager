@@ -30,3 +30,30 @@ def get_db():
 def init_db():
     """初始化数据库表"""
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
+
+
+# 旧库升级：SQLite 不支持自动加列，这里按需 ALTER
+_EXTRA_COLUMNS = {
+    "package_name": "VARCHAR(255)",
+    "app_version": "VARCHAR(50)",
+    "version_code": "VARCHAR(50)",
+    "min_sdk": "VARCHAR(20)",
+    "target_sdk": "VARCHAR(20)",
+    "architectures": "VARCHAR(100)",
+    "permissions_count": "INTEGER",
+}
+
+
+def ensure_schema():
+    """补齐新增字段，兼容已存在的 SQLite 数据库。"""
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(resources)")}
+            for column, ddl in _EXTRA_COLUMNS.items():
+                if column not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE resources ADD COLUMN {column} {ddl}")
+            conn.commit()
+    except Exception:
+        # 表还未创建（首次启动）时由 create_all 负责
+        pass

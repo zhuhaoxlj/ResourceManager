@@ -58,6 +58,14 @@ class ResourceResponse(ResourceBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # APK 解析信息
+    package_name: Optional[str] = Field(None, description="应用包名")
+    app_version: Optional[str] = Field(None, description="应用版本名（versionName）")
+    version_code: Optional[str] = Field(None, description="版本号（versionCode）")
+    min_sdk: Optional[str] = Field(None, description="最低 Android SDK")
+    target_sdk: Optional[str] = Field(None, description="目标 Android SDK")
+    architectures: Optional[str] = Field(None, description="支持的 CPU 架构")
+    permissions_count: Optional[int] = Field(None, description="权限数量")
     versions: list[VersionResponse] = []
 
     class Config:

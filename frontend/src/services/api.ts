@@ -1,6 +1,8 @@
 import axios from "axios"
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1"
+// 后端根地址（用于拼接静态资源，如 APK 图标）
+const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "")
 
 export interface Resource {
   id: number
@@ -9,6 +11,14 @@ export interface Resource {
   category?: string
   description?: string
   cover_image?: string
+  // APK 解析信息
+  package_name?: string
+  app_version?: string
+  version_code?: string
+  min_sdk?: string
+  target_sdk?: string
+  architectures?: string
+  permissions_count?: number
   created_at: string
   updated_at?: string
   versions: Version[]
@@ -58,6 +68,14 @@ apiClient.interceptors.request.use(
     return Promise.reject(error)
   }
 )
+
+// 静态资源地址（cover_image 可能存相对路径或 /api/v1/... 绝对路径）
+export function assetUrl(path?: string): string | undefined {
+  if (!path) return undefined
+  if (/^https?:\/\//.test(path)) return path
+  if (path.startsWith("/api/")) return `${API_ORIGIN}${path}`
+  return `${API_ORIGIN}/api/v1/static/covers/${path.replace(/^\/+/, "")}`
+}
 
 // 响应拦截器
 apiClient.interceptors.response.use(
@@ -156,6 +174,9 @@ export const api = {
   getScanStats: (): Promise<ScanStats> => {
     return apiClient.get("/scan/stats")
   },
+
+  // 静态资源
+  assetUrl,
 
   // 下载
   downloadFile: (versionId: number): string => {
