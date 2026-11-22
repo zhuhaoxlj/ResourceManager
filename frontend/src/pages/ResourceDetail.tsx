@@ -54,22 +54,33 @@ export function ResourceDetail() {
   const latestVersion = resource.versions[0]
   const icon = api.assetUrl(resource.cover_image)
   const isAndroid = resource.platform === "android"
+  const isMac = resource.platform === "mac"
 
   const details = [
     { label: "平台", value: PLATFORM_LABELS[resource.platform] || resource.platform },
     { label: "分类", value: resource.category || "未分类" },
-    resource.package_name && { label: "包名", value: resource.package_name, mono: true },
+    resource.package_name && {
+      label: isMac ? "Bundle ID" : "包名",
+      value: resource.package_name,
+      mono: true,
+    },
     (resource.app_version || latestVersion?.version) && {
       label: "版本",
       value: `v${resource.app_version || latestVersion?.version}`,
     },
-    resource.version_code && { label: "versionCode", value: resource.version_code },
+    resource.version_code && {
+      label: isMac ? "构建号" : "versionCode",
+      value: resource.version_code,
+    },
     resource.min_sdk && {
-      label: "最低 Android",
-      value: `API ${resource.min_sdk}${resource.target_sdk ? ` / 目标 API ${resource.target_sdk}` : ""}`,
+      label: isMac ? "最低 macOS" : "最低 Android",
+      value: isMac
+        ? resource.min_sdk
+        : `API ${resource.min_sdk}${resource.target_sdk ? ` / 目标 API ${resource.target_sdk}` : ""}`,
     },
     resource.architectures && { label: "CPU 架构", value: resource.architectures.split(",").join("、") },
-    resource.permissions_count !== null &&
+    !isMac &&
+      resource.permissions_count !== null &&
       resource.permissions_count !== undefined && {
         label: "权限数量",
         value: `${resource.permissions_count} 项`,
@@ -98,7 +109,7 @@ export function ResourceDetail() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1">
-            <div className={`aspect-square rounded-2xl overflow-hidden ${isAndroid ? "bg-white" : "bg-muted"}`}>
+            <div className={`aspect-square rounded-2xl overflow-hidden ${icon && (isAndroid || isMac) ? "bg-white" : "bg-muted"}`}>
               {icon ? (
                 <img
                   src={icon}

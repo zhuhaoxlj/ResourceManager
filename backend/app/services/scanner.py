@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.resource import Resource, Version
 from app.schemas.resource import ScanResult
-from app.services.apk_parser import ApkInfo, parse_apk
+from app.services.apk_parser import parse_apk
+from app.services.dmg_parser import parse_dmg
 
 settings = get_settings()
 
 APK_ICON_DIR = "apk"
+DMG_ICON_DIR = "mac"
 APK_CACHE_FILE = "apk_meta.json"
 
 
@@ -102,21 +104,22 @@ class DirectoryScanner:
 
     # ------------------------------------------------------------ APK 解析
 
-    def _save_icon(self, relative_path: str, info: ApkInfo) -> Optional[str]:
-        if not info.icon_png:
+    def _save_icon(self, relative_path: str, info, subdir: str = APK_ICON_DIR) -> Optional[str]:
+        icon_png = getattr(info, "icon_png", None)
+        if not icon_png:
             return None
 
-        digest = hashlib.sha1((info.package or relative_path).encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha1((getattr(info, "package", None) or relative_path).encode("utf-8")).hexdigest()[:16]
         filename = f"{digest}.png"
-        icon_dir = settings.upload_dir / "covers" / APK_ICON_DIR
+        icon_dir = settings.upload_dir / "covers" / subdir
         icon_dir.mkdir(parents=True, exist_ok=True)
         icon_file = icon_dir / filename
         if not icon_file.exists():
-            icon_file.write_bytes(info.icon_png)
-        return f"/api/v1/static/covers/{APK_ICON_DIR}/{filename}"
+            icon_file.write_bytes(icon_png)
+        return f"/api/v1/static/covers/{subdir}/{filename}"
 
-    def apk_meta(self, file_path: Path, relative_path: str) -> Optional[dict]:
-        """解析（并缓存）APK 元信息，返回可直接写库的字典。"""
+    def _cached_meta(self, file_path: Path, relative_path: str, parser, subdir: str) -> Optional[dict]:
+        """解析（并缓存）文件元信息，返回可直接写库的字典。"""
         cache = self._load_cache()
         try:
             stat = file_path.stat()
@@ -128,21 +131,27 @@ class DirectoryScanner:
         if cached and cached.get("mtime") == mtime and cached.get("size") == size:
             return None if cached.get("failed") else cached
 
-        info = parse_apk(file_path)
+        info = parser(file_path)
         if not info:
             # 解析失败也缓存，避免每次扫描都重试
             cache[relative_path] = {"mtime": mtime, "size": size, "failed": True}
             return None
 
         data = {"mtime": mtime, "size": size, **info.to_dict()}
-        data["icon"] = self._save_icon(relative_path, info)
+        data["icon"] = self._save_icon(relative_path, info, subdir)
         cache[relative_path] = data
         return data
 
+    def apk_meta(self, file_path: Path, relative_path: str) -> Optional[dict]:
+        return self._cached_meta(file_path, relative_path, parse_apk, APK_ICON_DIR)
+
+    def dmg_meta(self, file_path: Path, relative_path: str) -> Optional[dict]:
+        return self._cached_meta(file_path, relative_path, parse_dmg, DMG_ICON_DIR)
+
     # ------------------------------------------------------------ 写库
 
-    def _apply_apk_meta(self, resource: Resource, meta: dict, filename: str, platform: str) -> None:
-        """把 APK 元信息写到资源上（用户手动改过的名字不覆盖）。"""
+    def _apply_meta(self, resource: Resource, meta: dict, filename: str, platform: str) -> None:
+        """把解析出的元信息写到资源上（用户手动改过的名字不覆盖）。"""
         legacy_name = self.extract_resource_name(filename, platform)
         label = (meta.get("label") or "").strip()
         if label and resource.name in (legacy_name, Path(filename).stem, ""):
@@ -162,10 +171,12 @@ class DirectoryScanner:
             resource.architectures = meta["architectures"]
         if meta.get("permissions") is not None:
             resource.permissions_count = int(meta["permissions"])
+        if meta.get("category") and not resource.category:
+            resource.category = meta["category"]
         icon = meta.get("icon")
         if icon:
             resource.cover_image = icon
-        elif resource.cover_image and "/covers/apk/" in resource.cover_image:
+        elif resource.cover_image and re.search(r"/covers/(apk|mac)/", resource.cover_image):
             # 之前解析出的图标已失效（例如纯空白图），清掉让前端用首字母占位
             resource.cover_image = None
 
@@ -248,6 +259,8 @@ class DirectoryScanner:
         meta: Optional[dict] = None
         if ext == ".apk":
             meta = self.apk_meta(file_path, relative_path)
+        elif ext == ".dmg":
+            meta = self.dmg_meta(file_path, relative_path)
 
         # 提取信息（APK 优先用清单里的应用名/版本）
         version = self.extract_version(filename)
@@ -269,7 +282,7 @@ class DirectoryScanner:
             status = "created"
 
         if meta:
-            self._apply_apk_meta(resource, meta, filename, platform)
+            self._apply_meta(resource, meta, filename, platform)
             if meta.get("package"):
                 self._merge_duplicates(db, resource, meta["package"])
 

@@ -30,12 +30,14 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
   const latestVersion = resource.versions[0]
   const icon = api.assetUrl(resource.cover_image)
   const isAndroid = resource.platform === "android"
+  const isMac = resource.platform === "mac"
+  const isAppIcon = !!icon && (isAndroid || isMac)
   const versionText = resource.app_version || latestVersion?.version
 
   return (
     <Card className="group overflow-hidden transition-all hover:shadow-lg cursor-pointer">
       <div
-        className={`w-full overflow-hidden relative ${isAndroid ? "h-40 sm:h-44 bg-white" : "aspect-square bg-muted"}`}
+        className={`w-full overflow-hidden relative ${isAppIcon ? "h-40 sm:h-44 bg-white" : "aspect-square bg-muted"}`}
         onClick={onClick}
       >
         {icon ? (
@@ -44,7 +46,7 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
             alt={resource.name}
             loading="lazy"
             className={
-              isAndroid
+              isAppIcon
                 ? "h-full w-full object-contain transition-transform group-hover:scale-105"
                 : "h-full w-full object-cover transition-transform group-hover:scale-105"
             }

@@ -16,6 +16,11 @@ ENV HTTP_PROXY=${HTTP_PROXY}
 ENV HTTPS_PROXY=${HTTPS_PROXY}
 ENV NO_PROXY=${NO_PROXY}
 
+# 安装 7-Zip（解析 DMG 用）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends p7zip-full \
+    && rm -rf /var/lib/apt/lists/*
+
 # 设置工作目录
 WORKDIR /app
 
