@@ -159,9 +159,8 @@ class DirectoryScanner:
 
     def _apply_meta(self, resource: Resource, meta: dict, filename: str, platform: str) -> None:
         """把解析出的元信息写到资源上（用户手动改过的名字不覆盖）。"""
-        legacy_name = self.extract_resource_name(filename, platform)
         label = (meta.get("label") or "").strip()
-        if label and resource.name in (legacy_name, Path(filename).stem, ""):
+        if label and (resource.name_source or "auto") == "auto":
             resource.name = label
 
         if meta.get("package"):
@@ -283,7 +282,7 @@ class DirectoryScanner:
 
         status = "updated"
         if not resource:
-            resource = Resource(name=resource_name, platform=platform)
+            resource = Resource(name=resource_name, platform=platform, name_source="auto")
             db.add(resource)
             db.flush()
             status = "created"

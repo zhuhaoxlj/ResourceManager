@@ -35,6 +35,7 @@ def init_db():
 
 # 旧库升级：SQLite 不支持自动加列，这里按需 ALTER
 _EXTRA_COLUMNS = {
+    "name_source": "VARCHAR(20)",
     "package_name": "VARCHAR(255)",
     "app_version": "VARCHAR(50)",
     "version_code": "VARCHAR(50)",

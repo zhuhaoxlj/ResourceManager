@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+import re
 from datetime import datetime
 from typing import Optional, List
 from app.models.database import get_db
@@ -17,10 +18,19 @@ from app.schemas.resource import (
 router = APIRouter(prefix="/resources", tags=["resources"])
 
 
+def _version_key(text: str) -> tuple:
+    """把版本号拆成数字元组，便于按版本高低排序（20.3.0 > 2.5.12）。"""
+    return tuple(int(part) for part in re.findall(r"\d+", text or "")[:6])
+
+
 def _add_full_paths(versions: List[Version]) -> List[dict]:
-    """为版本列表添加完整路径，并按上传时间倒序（最新在前）"""
+    """为版本列表添加完整路径，按版本号倒序（最新的在前）"""
     result = []
-    ordered = sorted(versions, key=lambda item: item.upload_date or datetime(1970, 1, 1), reverse=True)
+    ordered = sorted(
+        versions,
+        key=lambda item: (_version_key(item.version), item.upload_date or datetime(1970, 1, 1)),
+        reverse=True,
+    )
     for v in ordered:
         v_dict = {
             "id": v.id,
@@ -40,7 +50,7 @@ def _enrich_resource(resource: Resource) -> dict:
     versions = _add_full_paths(resource.versions)
     # Android 的版本号以最新文件解析出的 versionName 为准
     app_version = resource.app_version
-    if resource.platform == "android" and versions:
+    if resource.platform in ("android", "mac") and versions:
         app_version = versions[0]["version"]
     return {
         "id": resource.id,
@@ -131,6 +141,8 @@ def update_resource(
     update_data = resource_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(resource, field, value)
+    if "name" in update_data:
+        resource.name_source = "manual"
 
     db.commit()
     db.refresh(resource)

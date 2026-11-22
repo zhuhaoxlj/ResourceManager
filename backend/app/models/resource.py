@@ -15,6 +15,8 @@ class Resource(Base):
     category = Column(String(100), nullable=True)
     description = Column(Text, nullable=True)
     cover_image = Column(String(500), nullable=True)
+    # 名称来源：auto=解析/文件名自动生成，manual=用户手动改过
+    name_source = Column(String(20), nullable=True, default="auto")
     # APK 解析出来的应用信息
     package_name = Column(String(255), nullable=True, index=True)
     app_version = Column(String(50), nullable=True)
