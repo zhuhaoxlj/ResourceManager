@@ -1,6 +1,6 @@
 import axios from "axios"
 
-const API_BASE_URL = "/api/v1"
+const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1"
 
 export interface Resource {
   id: number
@@ -20,6 +20,7 @@ export interface Version {
   file_path: string
   file_size?: number
   upload_date: string
+  full_path?: string
 }
 
 export interface ResourceListResponse {
@@ -29,6 +30,16 @@ export interface ResourceListResponse {
 
 export interface ScanStats {
   [platform: string]: number
+}
+
+export interface UploadProgress {
+  loaded: number
+  total: number
+  percent: number
+}
+
+export interface UploadOptions {
+  onProgress?: (progress: UploadProgress) => void
 }
 
 const apiClient = axios.create({
@@ -90,21 +101,51 @@ export const api = {
   },
 
   // 上传
-  uploadFile: async (file: File, platform: string): Promise<{ resource_id: number }> => {
+  uploadFile: async (
+    file: File,
+    platform: string,
+    options?: UploadOptions
+  ): Promise<{ resource_id: number }> => {
     const formData = new FormData()
     formData.append("file", file)
     formData.append("platform", platform)
+    // FormData 需要移除默认的 Content-Type，让浏览器自动设置 boundary
     return apiClient.post("/upload/file", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
+      headers: { "Content-Type": undefined },
+      onUploadProgress: (progressEvent) => {
+        if (options?.onProgress && progressEvent.total) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          options.onProgress({
+            loaded: progressEvent.loaded,
+            total: progressEvent.total,
+            percent,
+          })
+        }
+      },
     })
   },
 
   uploadCover: async (file: File, resourceId: number): Promise<{ cover_url: string }> => {
     const formData = new FormData()
     formData.append("file", file)
+    // FormData 需要移除默认的 Content-Type，让浏览器自动设置 boundary
     return apiClient.post(`/upload/cover/${resourceId}`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
+      headers: { "Content-Type": undefined },
     })
+  },
+
+  // 检查文件是否已存在
+  checkFileExists: async (filename: string, platform: string): Promise<{ exists: boolean; resource?: Resource }> => {
+    try {
+      const result = await apiClient.get("/resources/", {
+        params: { platform, search: filename.replace(/\.[^/.]+$/, "") },
+      }) as ResourceListResponse
+      const items = result.items
+      const exists = items.some((r: Resource) => r.name.toLowerCase() === filename.toLowerCase().replace(/\.[^/.]+$/, ""))
+      return { exists, resource: exists ? items[0] : undefined }
+    } catch {
+      return { exists: false }
+    }
   },
 
   // 扫描

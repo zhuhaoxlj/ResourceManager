@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useResourceStore } from "@/store/resourceStore"
 import { FileDropZone } from "@/components/FileDropZone"
@@ -11,8 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowLeft, RefreshCw, Loader2, CheckCircle2, AlertCircle } from "lucide-react"
-import { api } from "@/services/api"
+import { ArrowLeft, RefreshCw, Loader2, AlertTriangle } from "lucide-react"
+import { api, UploadProgress, Resource } from "@/services/api"
 import { platformConfig } from "@/lib/theme"
 
 interface ScanResult {
@@ -23,30 +23,116 @@ interface ScanResult {
   errors: string[]
 }
 
+type UploadStatus = "idle" | "checking" | "confirm-overwrite" | "uploading" | "success" | "error"
+
 export function Admin() {
   const navigate = useNavigate()
   const { resources, loading, fetchResources } = useResourceStore()
   const [selectedPlatform, setSelectedPlatform] = useState<string>("mac")
   const [isScanning, setIsScanning] = useState(false)
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
-  const [uploadStatus, setUploadStatus] = useState<{ message: string; type: "success" | "error" } | null>(null)
+
+  // 上传状态
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle")
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | undefined>()
+  const [uploadFileName, setUploadFileName] = useState<string>("")
+  const [uploadError, setUploadError] = useState<string>("")
+  const [existingResource, setExistingResource] = useState<Resource | null>(null)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     fetchResources()
   }, [fetchResources])
 
+  // 重置上传状态
+  const resetUploadState = () => {
+    setUploadStatus("idle")
+    setUploadProgress(undefined)
+    setUploadFileName("")
+    setUploadError("")
+    setExistingResource(null)
+    setPendingFile(null)
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+  }
+
+  // 检查文件是否已存在
+  const checkFileExists = async (file: File, platform: string) => {
+    setUploadStatus("checking")
+    setUploadFileName(file.name)
+
+    const { exists, resource } = await api.checkFileExists(file.name, platform)
+
+    if (exists && resource) {
+      setExistingResource(resource)
+      setPendingFile(file)
+      setUploadStatus("confirm-overwrite")
+    } else {
+      // 文件不存在，直接上传
+      startUpload(file, platform)
+    }
+  }
+
+  // 开始上传
+  const startUpload = async (file: File, platform: string) => {
+    setUploadStatus("uploading")
+    setUploadFileName(file.name)
+    setUploadProgress({ loaded: 0, total: file.size, percent: 0 })
+
+    abortControllerRef.current = new AbortController()
+
+    try {
+      await api.uploadFile(file, platform, {
+        onProgress: (progress) => {
+          setUploadProgress(progress)
+        },
+      })
+      setUploadStatus("success")
+      fetchResources()
+
+      // 3秒后重置状态
+      setTimeout(() => {
+        resetUploadState()
+      }, 3000)
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "上传失败"
+      setUploadError(errorMsg)
+      setUploadStatus("error")
+
+      // 5秒后重置状态
+      setTimeout(() => {
+        resetUploadState()
+      }, 5000)
+    }
+  }
+
+  // 处理文件拖放
   const handleFileDrop = async (files: File[]) => {
     if (files.length === 0) return
 
-    try {
-      await api.uploadFile(files[0], selectedPlatform)
-      setUploadStatus({ message: "上传成功！", type: "success" })
-      fetchResources()
-      setTimeout(() => setUploadStatus(null), 3000)
-    } catch (error) {
-      setUploadStatus({ message: error instanceof Error ? error.message : "上传失败", type: "error" })
-      setTimeout(() => setUploadStatus(null), 3000)
+    const file = files[0]
+    resetUploadState()
+    checkFileExists(file, selectedPlatform)
+  }
+
+  // 确认覆盖上传
+  const handleConfirmOverwrite = () => {
+    if (pendingFile) {
+      setExistingResource(null)
+      startUpload(pendingFile, selectedPlatform)
     }
+  }
+
+  // 取消覆盖
+  const handleCancelOverwrite = () => {
+    resetUploadState()
+  }
+
+  // 取消上传
+  const handleCancelUpload = () => {
+    abortControllerRef.current?.abort()
+    resetUploadState()
   }
 
   const handleScan = async () => {
@@ -80,6 +166,8 @@ export function Admin() {
     }
   }
 
+  const isUploading = uploadStatus === "uploading" || uploadStatus === "checking"
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
@@ -96,25 +184,56 @@ export function Admin() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+          {/* 上传区域 */}
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">上传文件</h2>
-            {uploadStatus && (
-              <div className={`flex items-center gap-2 p-3 rounded-lg ${
-                uploadStatus.type === "success"
-                  ? "bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-400"
-                  : "bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-400"
-              }`}>
-                {uploadStatus.type === "success" ? (
-                  <CheckCircle2 className="h-4 w-4" />
-                ) : (
-                  <AlertCircle className="h-4 w-4" />
-                )}
-                <span className="text-sm">{uploadStatus.message}</span>
+
+            {/* 覆盖确认对话框 */}
+            {uploadStatus === "confirm-overwrite" && existingResource && (
+              <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                    检测到重复资源
+                  </p>
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    资源 <span className="font-semibold">{existingResource.name}</span> 已存在，
+                    当前有 {existingResource.versions.length} 个版本：
+                  </p>
+                  <ul className="text-xs text-amber-700 dark:text-amber-300 ml-4 space-y-1">
+                    {existingResource.versions.map((v) => (
+                      <li key={v.id} className="font-mono break-all">
+                        • {v.version} → {v.full_path}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      onClick={handleConfirmOverwrite}
+                      className="bg-amber-600 hover:bg-amber-700"
+                    >
+                      继续上传（新增版本）
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleCancelOverwrite}
+                    >
+                      取消
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
+
             <div className="space-y-2">
               <Label>选择平台</Label>
-              <Select value={selectedPlatform} onValueChange={setSelectedPlatform}>
+              <Select
+                value={selectedPlatform}
+                onValueChange={setSelectedPlatform}
+                disabled={isUploading}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -127,13 +246,23 @@ export function Admin() {
                 </SelectContent>
               </Select>
             </div>
-            <FileDropZone onDrop={handleFileDrop} />
+
+            <FileDropZone
+              onDrop={handleFileDrop}
+              uploading={isUploading}
+              uploadProgress={uploadProgress}
+              uploadFileName={uploadFileName}
+              uploadStatus={uploadStatus === "checking" || uploadStatus === "confirm-overwrite" ? "idle" : uploadStatus}
+              uploadError={uploadError}
+              onCancel={uploadStatus === "uploading" ? handleCancelUpload : undefined}
+            />
           </div>
 
+          {/* 扫描区域 */}
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">目录扫描</h2>
             <p className="text-muted-foreground text-sm">
-              扫描资源目录（/Users/mark/Downloads），自动识别新文件并更新数据库
+              扫描资源目录，自动识别新文件并更新数据库
             </p>
             <Button
               onClick={handleScan}
@@ -171,6 +300,7 @@ export function Admin() {
           </div>
         </div>
 
+        {/* 资源列表 */}
         <div>
           <h2 className="text-xl font-semibold mb-4">资源列表 ({resources.length})</h2>
           {loading ? (

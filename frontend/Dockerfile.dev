@@ -1,0 +1,24 @@
+# 开发环境 Dockerfile - 支持 HMR 热重载
+ARG VITE_API_URL=http://localhost:8787/api/v1
+
+FROM node:20-alpine
+
+ARG VITE_API_URL
+
+ENV VITE_API_URL=${VITE_API_URL}
+
+WORKDIR /app
+
+# 安装 Bun
+RUN npm install -g bun
+
+# 先复制依赖文件
+COPY package.json bun.lock* ./
+
+# 安装依赖（这一层会被缓存，依赖不变时不会重新安装）
+RUN bun install --frozen-lockfile
+
+# 开发模式不需要构建，直接用 vite dev
+EXPOSE 5173
+
+CMD ["bun", "run", "dev", "--host", "0.0.0.0", "--port", "5173"]

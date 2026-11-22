@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # 资源目录
     resource_dir: Path = Path("/app/resources")
+    nas_resource_path: Path = Path("/vol2/1000/Software")  # NAS 真实路径
     upload_dir: Path = Path("/app/uploads")
 
     # 数据库
@@ -43,3 +44,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """获取配置单例"""
     return Settings()
+
+
+# 创建全局配置实例
+settings = get_settings()

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List
+from pathlib import Path
 from app.models.database import get_db
 from app.models.resource import Resource, Version
+from app.core.config import settings
 from app.schemas.resource import (
     ResourceCreate,
     ResourceUpdate,
@@ -12,6 +14,38 @@ from app.schemas.resource import (
 )
 
 router = APIRouter(prefix="/resources", tags=["resources"])
+
+
+def _add_full_paths(versions: List[Version]) -> List[dict]:
+    """为版本列表添加完整路径"""
+    result = []
+    for v in versions:
+        v_dict = {
+            "id": v.id,
+            "version": v.version,
+            "file_path": v.file_path,
+            "file_size": v.file_size,
+            "upload_date": v.upload_date,
+            # 使用 NAS 真实路径而非容器内路径
+            "full_path": str(settings.nas_resource_path / v.file_path),
+        }
+        result.append(v_dict)
+    return result
+
+
+def _enrich_resource(resource: Resource) -> dict:
+    """为资源添加版本的完整路径"""
+    return {
+        "id": resource.id,
+        "name": resource.name,
+        "platform": resource.platform,
+        "category": resource.category,
+        "description": resource.description,
+        "cover_image": resource.cover_image,
+        "created_at": resource.created_at,
+        "updated_at": resource.updated_at,
+        "versions": _add_full_paths(resource.versions),
+    }
 
 
 @router.get("/", response_model=ResourceListResponse)
@@ -40,7 +74,8 @@ def get_resources(
     # 分页
     resources = query.order_by(Resource.updated_at.desc()).offset(skip).limit(limit).all()
 
-    return ResourceListResponse(total=total, items=resources)
+    items = [_enrich_resource(r) for r in resources]
+    return ResourceListResponse(total=total, items=items)
 
 
 @router.post("/", response_model=ResourceResponse)
@@ -50,7 +85,7 @@ def create_resource(resource: ResourceCreate, db: Session = Depends(get_db)):
     db.add(db_resource)
     db.commit()
     db.refresh(db_resource)
-    return db_resource
+    return _enrich_resource(db_resource)
 
 
 @router.get("/{resource_id}", response_model=ResourceResponse)
@@ -59,7 +94,7 @@ def get_resource(resource_id: int, db: Session = Depends(get_db)):
     resource = db.query(Resource).filter(Resource.id == resource_id).first()
     if not resource:
         raise HTTPException(status_code=404, detail="资源不存在")
-    return resource
+    return _enrich_resource(resource)
 
 
 @router.put("/{resource_id}", response_model=ResourceResponse)
@@ -80,7 +115,7 @@ def update_resource(
 
     db.commit()
     db.refresh(resource)
-    return resource
+    return _enrich_resource(resource)
 
 
 @router.delete("/{resource_id}")
@@ -102,9 +137,10 @@ def get_resource_versions(resource_id: int, db: Session = Depends(get_db)):
     if not resource:
         raise HTTPException(status_code=404, detail="资源不存在")
 
-    return (
+    versions = (
         db.query(Version)
         .filter(Version.resource_id == resource_id)
         .order_by(Version.upload_date.desc())
         .all()
     )
+    return _add_full_paths(versions)

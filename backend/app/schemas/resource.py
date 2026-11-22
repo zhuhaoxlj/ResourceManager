@@ -7,7 +7,7 @@ class VersionBase(BaseModel):
     """版本基础模型"""
 
     version: str = Field(..., description="版本号")
-    file_path: str = Field(..., description="文件路径")
+    file_path: str = Field(..., description="文件路径（相对路径）")
 
 
 class VersionCreate(VersionBase):
@@ -21,6 +21,7 @@ class VersionResponse(VersionBase):
     id: int
     file_size: Optional[int]
     upload_date: datetime
+    full_path: Optional[str] = Field(None, description="完整文件路径")
 
     class Config:
         from_attributes = True
