@@ -82,6 +82,24 @@ def _xml_text(data: bytes) -> Optional[str]:
         return None
 
 
+def _looks_blank(image: Optional[Image.Image]) -> bool:
+    """图标是否几乎没有内容（全透明白图、纯色块），这类图标不如用占位符。"""
+    if image is None:
+        return True
+    try:
+        small = image.convert("RGBA").resize((16, 16))
+    except Exception:
+        return True
+    visible = [pixel for pixel in small.getdata() if pixel[3] > 10]
+    if len(visible) < 16:
+        return True
+    colors = {(r // 24, g // 24, b // 24) for r, g, b, _ in visible}
+    brightness = sum(r + g + b for r, g, b, _ in visible) / (len(visible) * 3)
+    if len(colors) <= 1 and brightness > 240:
+        return True
+    return False
+
+
 def _to_png(data: bytes, max_size: int = ADAPTIVE_ICON_MAX) -> Optional[bytes]:
     """转成 PNG，顺手限制尺寸，避免超大图标。"""
     try:
@@ -197,6 +215,25 @@ def _extract_icon(apk: APK) -> Optional[bytes]:
     if not text:
         return None
 
+    # layer-list：常见于 Magisk 这类「纯色底 + 前景」的老式图标
+    if "<layer-list" in text:
+        work_size = 432
+        canvas = Image.new("RGBA", (work_size, work_size), (0, 0, 0, 0))
+        for item in re.findall(r"<item[^>]*>.*?</item>|<item[^>]*/>", text, re.S):
+            drawable_ref = re.search(r'android:drawable="([^"]+)"', item)
+            if drawable_ref:
+                layer = _adaptive_reference(apk, drawable_ref.group(1), work_size)
+                if layer:
+                    canvas.alpha_composite(layer)
+                continue
+            solid = re.search(r'<solid[^>]*android:color="([^"]+)"', item)
+            if solid:
+                rgba = parse_color(solid.group(1))
+                if rgba:
+                    canvas.alpha_composite(Image.new("RGBA", (work_size, work_size), rgba))
+        canvas = canvas.resize((ADAPTIVE_ICON_MAX, ADAPTIVE_ICON_MAX), Image.LANCZOS)
+        return _image_to_png(canvas)
+
     # 普通矢量图标
     if "<vector" in text:
         image = render_vector(text, size=ADAPTIVE_ICON_MAX)
@@ -228,7 +265,7 @@ def _extract_icon(apk: APK) -> Optional[bytes]:
 
 
 def _image_to_png(image: Optional[Image.Image]) -> Optional[bytes]:
-    if image is None:
+    if image is None or _looks_blank(image):
         return None
     try:
         buffer = io.BytesIO()

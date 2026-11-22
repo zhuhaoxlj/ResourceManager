@@ -162,8 +162,12 @@ class DirectoryScanner:
             resource.architectures = meta["architectures"]
         if meta.get("permissions") is not None:
             resource.permissions_count = int(meta["permissions"])
-        if meta.get("icon"):
-            resource.cover_image = meta["icon"]
+        icon = meta.get("icon")
+        if icon:
+            resource.cover_image = icon
+        elif resource.cover_image and "/covers/apk/" in resource.cover_image:
+            # 之前解析出的图标已失效（例如纯空白图），清掉让前端用首字母占位
+            resource.cover_image = None
 
     def _find_resource(
         self,
