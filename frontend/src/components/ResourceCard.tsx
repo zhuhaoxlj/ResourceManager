@@ -35,7 +35,7 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
   return (
     <Card className="group overflow-hidden transition-all hover:shadow-lg cursor-pointer">
       <div
-        className={`aspect-square w-full overflow-hidden relative ${isAndroid ? "bg-white" : "bg-muted"}`}
+        className={`w-full overflow-hidden relative ${isAndroid ? "h-40 sm:h-44 bg-white" : "aspect-square bg-muted"}`}
         onClick={onClick}
       >
         {icon ? (
@@ -62,37 +62,31 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
-      <CardContent className="p-4" onClick={onClick}>
-        <h3 className="font-semibold text-lg truncate" title={resource.name}>
+      <CardContent className="p-3" onClick={onClick}>
+        <h3 className="font-semibold text-sm truncate" title={resource.name}>
           {resource.name}
         </h3>
-        <p className="text-sm text-muted-foreground mt-1 truncate">
+        <p className="text-xs text-muted-foreground mt-0.5 truncate">
           {resource.category || (resource.package_name ? "Android 应用" : "未分类")}
         </p>
-        {resource.package_name && (
-          <p className="text-[11px] text-muted-foreground/80 mt-1 truncate font-mono">
-            {resource.package_name}
-          </p>
-        )}
         {latestVersion && (
-          <p className="text-xs text-muted-foreground mt-2">
+          <p className="text-[11px] text-muted-foreground mt-1 truncate">
             v{versionText}
             {latestVersion.file_size && ` · ${formatFileSize(latestVersion.file_size)}`}
-            {resource.architectures && ` · ${resource.architectures.split(",")[0]}`}
           </p>
         )}
       </CardContent>
-      <CardFooter className="p-4 pt-0">
+      <CardFooter className="p-3 pt-0">
         <Button
           variant="outline"
           size="sm"
-          className="w-full"
+          className="w-full h-8 text-xs"
           onClick={(e) => {
             e.stopPropagation()
             if (onDownload) onDownload()
           }}
         >
-          <Download className="h-4 w-4 mr-2" />
+          <Download className="h-3.5 w-3.5 mr-1.5" />
           下载
         </Button>
       </CardFooter>

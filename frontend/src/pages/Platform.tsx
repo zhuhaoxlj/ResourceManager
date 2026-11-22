@@ -51,19 +51,19 @@ export function Platform() {
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
-        <div className="mb-8">
+        <div className="mb-6">
           <Button
             variant="ghost"
             onClick={() => navigate("/")}
-            className="mb-4"
+            className="mb-3"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
             返回首页
           </Button>
-          <h1 className="text-3xl font-bold">{config.name} 资源</h1>
+          <h1 className="text-2xl font-bold">{config.name} 资源</h1>
         </div>
 
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -83,7 +83,7 @@ export function Platform() {
             <p>暂无资源</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
             {resources.map((resource) => (
               <ResourceCard
                 key={resource.id}
