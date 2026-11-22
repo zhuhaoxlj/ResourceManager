@@ -19,6 +19,8 @@ settings = get_settings()
 APK_ICON_DIR = "apk"
 DMG_ICON_DIR = "mac"
 APK_CACHE_FILE = "apk_meta.json"
+# 解析逻辑变化时 +1，旧缓存自动失效
+PARSER_VERSION = 2
 
 
 class DirectoryScanner:
@@ -128,16 +130,21 @@ class DirectoryScanner:
             return None
 
         cached = cache.get(relative_path)
-        if cached and cached.get("mtime") == mtime and cached.get("size") == size:
+        if (
+            cached
+            and cached.get("v") == PARSER_VERSION
+            and cached.get("mtime") == mtime
+            and cached.get("size") == size
+        ):
             return None if cached.get("failed") else cached
 
         info = parser(file_path)
         if not info:
             # 解析失败也缓存，避免每次扫描都重试
-            cache[relative_path] = {"mtime": mtime, "size": size, "failed": True}
+            cache[relative_path] = {"v": PARSER_VERSION, "mtime": mtime, "size": size, "failed": True}
             return None
 
-        data = {"mtime": mtime, "size": size, **info.to_dict()}
+        data = {"v": PARSER_VERSION, "mtime": mtime, "size": size, **info.to_dict()}
         data["icon"] = self._save_icon(relative_path, info, subdir)
         cache[relative_path] = data
         return data

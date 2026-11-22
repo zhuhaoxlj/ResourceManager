@@ -109,9 +109,13 @@ def _run(args: List[str], timeout: int = TIMEOUT) -> subprocess.CompletedProcess
 
 
 def list_entries(dmg_path: Path) -> List[Tuple[str, int]]:
-    """列出 DMG 内所有条目（路径 + 大小）。"""
-    result = _run([SEVEN_ZIP, "l", "-ba", str(dmg_path)])
-    if result.returncode != 0:
+    """列出 DMG 内所有条目（路径 + 大小）。
+
+    注意：7-Zip 对某些镜像会返回码 2（有警告）但列表仍然可用，所以不看返回码。
+    """
+    try:
+        result = _run([SEVEN_ZIP, "l", "-ba", str(dmg_path)])
+    except (subprocess.TimeoutExpired, OSError):
         return []
 
     entries: List[Tuple[str, int]] = []
@@ -132,10 +136,9 @@ def list_entries(dmg_path: Path) -> List[Tuple[str, int]]:
 
 def _extract(dmg_path: Path, internal_path: str, workdir: Path) -> Optional[bytes]:
     """把 DMG 里的单个文件解到临时目录再读出来。"""
-    result = _run(
-        [SEVEN_ZIP, "x", "-y", f"-o{workdir}", str(dmg_path), internal_path]
-    )
-    if result.returncode != 0:
+    try:
+        _run([SEVEN_ZIP, "x", "-y", f"-o{workdir}", str(dmg_path), internal_path])
+    except (subprocess.TimeoutExpired, OSError):
         return None
 
     target = workdir / internal_path
@@ -151,6 +154,31 @@ def _extract(dmg_path: Path, internal_path: str, workdir: Path) -> Optional[byte
         return None
 
 
+def _parse_plist(raw: bytes) -> Optional[dict]:
+    """解析 plist；兼容缺少 <?xml 声明、只有 DOCTYPE 的 XML plist。"""
+    try:
+        return plistlib.loads(raw)
+    except Exception:
+        pass
+
+    head = raw.lstrip()
+    if not (head.startswith(b"<!DOCTYPE plist") or head.startswith(b"<plist")):
+        return None
+
+    declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    for candidate in (declaration + head, None):
+        if candidate is None:
+            end = head.find(b"</plist>")
+            if end < 0:
+                return None
+            candidate = declaration + head[: end + len(b"</plist>")]
+        try:
+            return plistlib.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
 def _pick_main_plist(entries: List[Tuple[str, int]]) -> Optional[str]:
     candidates = [
         path
@@ -159,35 +187,43 @@ def _pick_main_plist(entries: List[Tuple[str, int]]) -> Optional[str]:
     ]
     if not candidates:
         return None
-    # 层级最少的就是主 .app
-    return min(candidates, key=lambda path: (path.count("/"), path))
+
+    # 层级最少的就是主 .app；同层级里排除 Install/Uninstall 这类辅助程序
+    best_depth = min(path.count("/") for path in candidates)
+    top = sorted(path for path in candidates if path.count("/") == best_depth)
+    preferred = [
+        path
+        for path in top
+        if not re.search(r"/(install|uninstall|setup|updater|upgrade)[^/]*\.app/", path, re.IGNORECASE)
+    ]
+    return (preferred or top)[0]
 
 
-def _pick_icon_path(
+def _icon_candidates(
     entries: List[Tuple[str, int]], app_dir: str, plist: dict
-) -> Optional[str]:
+) -> List[str]:
     resources = f"{app_dir}/Contents/Resources/"
+    candidates: List[str] = []
+
     icon_file = plist.get("CFBundleIconFile") or plist.get("CFBundleIconName")
     if isinstance(icon_file, str) and icon_file:
         name = icon_file if icon_file.lower().endswith(".icns") else f"{icon_file}.icns"
-        candidate = f"{resources}{name}"
-        if any(path == candidate for path, _ in entries):
-            return candidate
+        preferred = f"{resources}{name}"
+        if any(path == preferred for path, _ in entries):
+            candidates.append(preferred)
 
     icns = [
         (path, size)
         for path, size in entries
-        if path.startswith(resources) and path.lower().endswith(".icns")
+        if path.startswith(resources) and path.lower().endswith(".icns") and size > 0
     ]
     if not icns:
         # 退一步：整个 app 里任意 icns
         icns = [
             (path, size)
             for path, size in entries
-            if path.startswith(app_dir + "/") and path.lower().endswith(".icns")
+            if path.startswith(app_dir + "/") and path.lower().endswith(".icns") and size > 0
         ]
-    if not icns:
-        return None
 
     def score(item: Tuple[str, int]) -> Tuple[int, int, int]:
         path, size = item
@@ -195,7 +231,10 @@ def _pick_icon_path(
         hint = 2 if "appicon" in lower else (1 if "icon" in lower else 0)
         return (hint, size, -path.count("/"))
 
-    return max(icns, key=score)[0]
+    for path, _size in sorted(icns, key=score, reverse=True):
+        if path not in candidates:
+            candidates.append(path)
+    return candidates
 
 
 def _icns_to_png(data: bytes) -> Optional[bytes]:
@@ -292,9 +331,8 @@ def parse_dmg(path: Path) -> Optional[DmgInfo]:
         raw_plist = _extract(path, plist_path, workdir)
         if not raw_plist:
             return None
-        try:
-            plist = plistlib.loads(raw_plist)
-        except Exception:
+        plist = _parse_plist(raw_plist)
+        if not plist:
             return None
 
         display = plist.get("CFBundleDisplayName") or plist.get("CFBundleName")
@@ -320,11 +358,14 @@ def parse_dmg(path: Path) -> Optional[DmgInfo]:
 
         info.category = _category(plist.get("LSApplicationCategoryType"))
 
-        icon_path = _pick_icon_path(entries, app_dir, plist)
-        if icon_path:
+        for icon_path in _icon_candidates(entries, app_dir, plist):
             raw_icon = _extract(path, icon_path, workdir)
-            if raw_icon:
-                info.icon_png = _icns_to_png(raw_icon)
+            if not raw_icon:
+                continue
+            png = _icns_to_png(raw_icon)
+            if png:
+                info.icon_png = png
+                break
 
         executable = plist.get("CFBundleExecutable")
         if isinstance(executable, str) and executable:
