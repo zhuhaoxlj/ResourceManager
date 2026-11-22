@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from datetime import datetime
 from typing import Optional, List
 from app.models.database import get_db
 from app.models.resource import Resource, Version
@@ -17,9 +18,10 @@ router = APIRouter(prefix="/resources", tags=["resources"])
 
 
 def _add_full_paths(versions: List[Version]) -> List[dict]:
-    """为版本列表添加完整路径"""
+    """为版本列表添加完整路径，并按上传时间倒序（最新在前）"""
     result = []
-    for v in versions:
+    ordered = sorted(versions, key=lambda item: item.upload_date or datetime(1970, 1, 1), reverse=True)
+    for v in ordered:
         v_dict = {
             "id": v.id,
             "version": v.version,
@@ -35,6 +37,11 @@ def _add_full_paths(versions: List[Version]) -> List[dict]:
 
 def _enrich_resource(resource: Resource) -> dict:
     """为资源添加版本的完整路径"""
+    versions = _add_full_paths(resource.versions)
+    # Android 的版本号以最新文件解析出的 versionName 为准
+    app_version = resource.app_version
+    if resource.platform == "android" and versions:
+        app_version = versions[0]["version"]
     return {
         "id": resource.id,
         "name": resource.name,
@@ -43,7 +50,7 @@ def _enrich_resource(resource: Resource) -> dict:
         "description": resource.description,
         "cover_image": resource.cover_image,
         "package_name": resource.package_name,
-        "app_version": resource.app_version,
+        "app_version": app_version,
         "version_code": resource.version_code,
         "min_sdk": resource.min_sdk,
         "target_sdk": resource.target_sdk,
@@ -51,7 +58,7 @@ def _enrich_resource(resource: Resource) -> dict:
         "permissions_count": resource.permissions_count,
         "created_at": resource.created_at,
         "updated_at": resource.updated_at,
-        "versions": _add_full_paths(resource.versions),
+        "versions": versions,
     }
 
 
