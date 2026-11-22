@@ -20,7 +20,7 @@ APK_ICON_DIR = "apk"
 DMG_ICON_DIR = "mac"
 APK_CACHE_FILE = "apk_meta.json"
 # 解析逻辑变化时 +1，旧缓存自动失效
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 
 
 class DirectoryScanner:
@@ -111,7 +111,9 @@ class DirectoryScanner:
         if not icon_png:
             return None
 
-        digest = hashlib.sha1((getattr(info, "package", None) or relative_path).encode("utf-8")).hexdigest()[:16]
+        # 文件名带上解析器版本，解析逻辑升级后图标会自动换新
+        seed = f"{getattr(info, 'package', None) or relative_path}|v{PARSER_VERSION}"
+        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
         filename = f"{digest}.png"
         icon_dir = settings.upload_dir / "covers" / subdir
         icon_dir.mkdir(parents=True, exist_ok=True)
@@ -119,6 +121,13 @@ class DirectoryScanner:
         if not icon_file.exists():
             icon_file.write_bytes(icon_png)
         return f"/api/v1/static/covers/{subdir}/{filename}"
+
+    def _icon_exists(self, icon_path: Optional[str]) -> bool:
+        """缓存里的图标文件是否还在（被清理后需要重新解析）。"""
+        if not icon_path:
+            return True
+        relative = icon_path.replace("/api/v1/static/covers/", "", 1)
+        return (settings.upload_dir / "covers" / relative).is_file()
 
     def _cached_meta(self, file_path: Path, relative_path: str, parser, subdir: str) -> Optional[dict]:
         """解析（并缓存）文件元信息，返回可直接写库的字典。"""
@@ -135,6 +144,7 @@ class DirectoryScanner:
             and cached.get("v") == PARSER_VERSION
             and cached.get("mtime") == mtime
             and cached.get("size") == size
+            and self._icon_exists(cached.get("icon"))
         ):
             return None if cached.get("failed") else cached
 
