@@ -50,6 +50,7 @@ export interface UploadProgress {
 
 export interface UploadOptions {
   onProgress?: (progress: UploadProgress) => void
+  signal?: AbortSignal
 }
 
 const apiClient = axios.create({
@@ -130,6 +131,7 @@ export const api = {
     // FormData 需要移除默认的 Content-Type，让浏览器自动设置 boundary
     return apiClient.post("/upload/file", formData, {
       headers: { "Content-Type": undefined },
+      signal: options?.signal,
       onUploadProgress: (progressEvent) => {
         if (options?.onProgress && progressEvent.total) {
           const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
@@ -155,11 +157,18 @@ export const api = {
   // 检查文件是否已存在
   checkFileExists: async (filename: string, platform: string): Promise<{ exists: boolean; resource?: Resource }> => {
     try {
+      const stem = filename.replace(/\.[^/.]+$/, "")
+      const keyword = stem.replace(/[-_ ]?v?\d+(?:\.\d+)*$/i, "").trim() || stem
       const result = await apiClient.get("/resources/", {
-        params: { platform, search: filename.replace(/\.[^/.]+$/, "") },
+        params: { platform, search: keyword },
       }) as ResourceListResponse
       const items = result.items
-      const exists = items.some((r: Resource) => r.name.toLowerCase() === filename.toLowerCase().replace(/\.[^/.]+$/, ""))
+      const lowerStem = stem.toLowerCase()
+      const lowerName = filename.toLowerCase()
+      const exists = items.some((r: Resource) =>
+        r.name.toLowerCase() === lowerStem ||
+        r.versions.some((v) => (v.file_path.split("/").pop() || "").toLowerCase() === lowerName)
+      )
       return { exists, resource: exists ? items[0] : undefined }
     } catch {
       return { exists: false }

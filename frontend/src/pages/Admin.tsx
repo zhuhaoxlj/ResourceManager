@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useResourceStore } from "@/store/resourceStore"
 import { FileDropZone } from "@/components/FileDropZone"
+import { UploadQueue, type UploadItem } from "@/components/UploadQueue"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import {
@@ -11,8 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowLeft, RefreshCw, Loader2, AlertTriangle } from "lucide-react"
-import { api, UploadProgress, Resource } from "@/services/api"
+import { ArrowLeft, RefreshCw, Loader2 } from "lucide-react"
+import { api } from "@/services/api"
 import { platformConfig } from "@/lib/theme"
 
 interface ScanResult {
@@ -23,8 +24,6 @@ interface ScanResult {
   errors: string[]
 }
 
-type UploadStatus = "idle" | "checking" | "confirm-overwrite" | "uploading" | "success" | "error"
-
 export function Admin() {
   const navigate = useNavigate()
   const { resources, loading, fetchResources } = useResourceStore()
@@ -32,114 +31,164 @@ export function Admin() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
 
-  // 上传状态
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle")
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | undefined>()
-  const [uploadFileName, setUploadFileName] = useState<string>("")
-  const [uploadError, setUploadError] = useState<string>("")
-  const [existingResource, setExistingResource] = useState<Resource | null>(null)
-  const [pendingFile, setPendingFile] = useState<File | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  // 上传队列
+  const [queue, setQueue] = useState<UploadItem[]>([])
+  const queueRef = useRef<UploadItem[]>([])
+  const processingRef = useRef(false)
+  const abortMapRef = useRef<Record<string, AbortController>>({})
+  const percentMapRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
     fetchResources()
   }, [fetchResources])
 
-  // 重置上传状态
-  const resetUploadState = () => {
-    setUploadStatus("idle")
-    setUploadProgress(undefined)
-    setUploadFileName("")
-    setUploadError("")
-    setExistingResource(null)
-    setPendingFile(null)
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
+  // 队列状态同时保存在 ref 里，异步上传循环里始终能读到最新值
+  const setItems = (next: UploadItem[]) => {
+    queueRef.current = next
+    setQueue(next)
   }
 
-  // 检查文件是否已存在
-  const checkFileExists = async (file: File, platform: string) => {
-    setUploadStatus("checking")
-    setUploadFileName(file.name)
+  const updateItem = (id: string, patch: Partial<UploadItem>) => {
+    setItems(queueRef.current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }
 
-    const { exists, resource } = await api.checkFileExists(file.name, platform)
+  const getItem = (id: string) => queueRef.current.find((item) => item.id === id)
 
-    if (exists && resource) {
-      setExistingResource(resource)
-      setPendingFile(file)
-      setUploadStatus("confirm-overwrite")
-    } else {
-      // 文件不存在，直接上传
-      startUpload(file, platform)
+  // 依次处理队列里所有 pending 的文件
+  const processQueue = async () => {
+    if (processingRef.current) return
+    processingRef.current = true
+    try {
+      for (;;) {
+        const next = queueRef.current.find((item) => item.status === "pending")
+        if (!next) break
+        await processItem(next.id)
+      }
+    } finally {
+      processingRef.current = false
     }
   }
 
-  // 开始上传
-  const startUpload = async (file: File, platform: string) => {
-    setUploadStatus("uploading")
-    setUploadFileName(file.name)
-    setUploadProgress({ loaded: 0, total: file.size, percent: 0 })
+  const processItem = async (id: string) => {
+    const item = getItem(id)
+    if (!item) return
 
-    abortControllerRef.current = new AbortController()
+    updateItem(id, { status: "checking", error: undefined, note: undefined })
+
+    // 检查同名资源（仅做提示，不阻断上传）
+    let note: string | undefined
+    try {
+      const { exists, resource } = await api.checkFileExists(item.file.name, item.platform)
+      if (exists && resource) {
+        note = `同名资源「${resource.name}」已存在，本次将新增版本`
+      }
+    } catch {
+      // 检查失败不影响上传
+    }
+
+    if (getItem(id)?.status === "cancelled") return
+
+    const controller = new AbortController()
+    abortMapRef.current[id] = controller
+    percentMapRef.current[id] = 0
+
+    updateItem(id, {
+      status: "uploading",
+      note,
+      progress: { loaded: 0, total: item.file.size, percent: 0 },
+    })
 
     try {
-      await api.uploadFile(file, platform, {
+      await api.uploadFile(item.file, item.platform, {
+        signal: controller.signal,
         onProgress: (progress) => {
-          setUploadProgress(progress)
+          // 进度事件很密，按百分比变化节流
+          if (progress.percent !== percentMapRef.current[id]) {
+            percentMapRef.current[id] = progress.percent
+            updateItem(id, { progress })
+          }
         },
       })
-      setUploadStatus("success")
-      fetchResources()
-
-      // 3秒后重置状态
-      setTimeout(() => {
-        resetUploadState()
-      }, 3000)
+      if (getItem(id)?.status !== "cancelled") {
+        updateItem(id, {
+          status: "success",
+          progress: { loaded: item.file.size, total: item.file.size, percent: 100 },
+        })
+        fetchResources()
+      }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "上传失败"
-      setUploadError(errorMsg)
-      setUploadStatus("error")
-
-      // 5秒后重置状态
-      setTimeout(() => {
-        resetUploadState()
-      }, 5000)
+      if (controller.signal.aborted) {
+        updateItem(id, { status: "cancelled" })
+      } else {
+        updateItem(id, {
+          status: "error",
+          error: error instanceof Error ? error.message : "上传失败",
+        })
+      }
+    } finally {
+      delete abortMapRef.current[id]
+      delete percentMapRef.current[id]
     }
   }
 
-  // 处理文件拖放
-  const handleFileDrop = async (files: File[]) => {
+  // 拖入多个文件：全部入队后逐个上传
+  const handleFileDrop = (files: File[]) => {
     if (files.length === 0) return
 
-    const file = files[0]
-    resetUploadState()
-    checkFileExists(file, selectedPlatform)
+    const items: UploadItem[] = files.map((file) => ({
+      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      platform: selectedPlatform,
+      status: "pending",
+    }))
+
+    setItems([...queueRef.current, ...items])
+    void processQueue()
   }
 
-  // 确认覆盖上传
-  const handleConfirmOverwrite = () => {
-    if (pendingFile) {
-      setExistingResource(null)
-      startUpload(pendingFile, selectedPlatform)
+  const handleCancelItem = (id: string) => {
+    const item = getItem(id)
+    if (!item) return
+    if (item.status === "uploading") {
+      abortMapRef.current[id]?.abort()
+    } else {
+      updateItem(id, { status: "cancelled" })
     }
   }
 
-  // 取消覆盖
-  const handleCancelOverwrite = () => {
-    resetUploadState()
+  const handleCancelAll = () => {
+    Object.values(abortMapRef.current).forEach((controller) => controller.abort())
+    setItems(
+      queueRef.current.map((item) =>
+        item.status === "pending" || item.status === "checking" || item.status === "uploading"
+          ? { ...item, status: "cancelled" }
+          : item
+      )
+    )
   }
 
-  // 取消上传
-  const handleCancelUpload = () => {
-    abortControllerRef.current?.abort()
-    resetUploadState()
+  const handleRetry = (id: string) => {
+    updateItem(id, { status: "pending", error: undefined })
+    void processQueue()
+  }
+
+  const handleRemove = (id: string) => {
+    setItems(queueRef.current.filter((item) => item.id !== id))
+  }
+
+  const handleClearFinished = () => {
+    setItems(
+      queueRef.current.filter(
+        (item) => item.status !== "success" && item.status !== "error" && item.status !== "cancelled"
+      )
+    )
   }
 
   const handleScan = async () => {
     setIsScanning(true)
     setScanResult(null)
     try {
-      const result = await api.triggerScan() as ScanResult
+      const result = (await api.triggerScan()) as ScanResult
       setScanResult(result)
       fetchResources()
     } catch (error) {
@@ -166,8 +215,6 @@ export function Admin() {
     }
   }
 
-  const isUploading = uploadStatus === "uploading" || uploadStatus === "checking"
-
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
@@ -188,52 +235,9 @@ export function Admin() {
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">上传文件</h2>
 
-            {/* 覆盖确认对话框 */}
-            {uploadStatus === "confirm-overwrite" && existingResource && (
-              <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                <div className="flex-1 space-y-2">
-                  <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
-                    检测到重复资源
-                  </p>
-                  <p className="text-xs text-amber-800 dark:text-amber-200">
-                    资源 <span className="font-semibold">{existingResource.name}</span> 已存在，
-                    当前有 {existingResource.versions.length} 个版本：
-                  </p>
-                  <ul className="text-xs text-amber-700 dark:text-amber-300 ml-4 space-y-1">
-                    {existingResource.versions.map((v) => (
-                      <li key={v.id} className="font-mono break-all">
-                        • {v.version} → {v.full_path}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex gap-2 mt-2">
-                    <Button
-                      size="sm"
-                      onClick={handleConfirmOverwrite}
-                      className="bg-amber-600 hover:bg-amber-700"
-                    >
-                      继续上传（新增版本）
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleCancelOverwrite}
-                    >
-                      取消
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
             <div className="space-y-2">
               <Label>选择平台</Label>
-              <Select
-                value={selectedPlatform}
-                onValueChange={setSelectedPlatform}
-                disabled={isUploading}
-              >
+              <Select value={selectedPlatform} onValueChange={setSelectedPlatform}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -245,16 +249,20 @@ export function Admin() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                平台在拖入时确定，队列中的文件沿用入队时的平台
+              </p>
             </div>
 
-            <FileDropZone
-              onDrop={handleFileDrop}
-              uploading={isUploading}
-              uploadProgress={uploadProgress}
-              uploadFileName={uploadFileName}
-              uploadStatus={uploadStatus === "checking" || uploadStatus === "confirm-overwrite" ? "idle" : uploadStatus}
-              uploadError={uploadError}
-              onCancel={uploadStatus === "uploading" ? handleCancelUpload : undefined}
+            <FileDropZone onDrop={handleFileDrop} />
+
+            <UploadQueue
+              items={queue}
+              onCancel={handleCancelItem}
+              onRemove={handleRemove}
+              onRetry={handleRetry}
+              onClearFinished={handleClearFinished}
+              onCancelAll={handleCancelAll}
             />
           </div>
 
