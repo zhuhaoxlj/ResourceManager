@@ -25,11 +25,11 @@ WORKDIR /app
 # 安装 Bun
 RUN npm install -g bun
 
-# 复制依赖文件
-COPY package.json bun.lock* ./
+# 复制依赖文件（没有锁文件时 bun 会按 package.json 解析）
+COPY package.json ./
 
-# 安装所有依赖（包括 devDependencies，因为需要 vite）
-RUN bun install --frozen-lockfile
+# 安装所有依赖（包括 devDependencies，因为构建需要 tsc/vite）
+RUN bun install
 
 # 复制源代码
 COPY . .
