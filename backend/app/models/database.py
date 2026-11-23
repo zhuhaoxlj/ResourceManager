@@ -34,6 +34,10 @@ def init_db():
 
 
 # 旧库升级：SQLite 不支持自动加列，这里按需 ALTER
+_VERSION_EXTRA_COLUMNS = {
+    "root_path": "VARCHAR(500)",
+}
+
 _EXTRA_COLUMNS = {
     "name_source": "VARCHAR(20)",
     "package_name": "VARCHAR(255)",
@@ -54,6 +58,13 @@ def ensure_schema():
             for column, ddl in _EXTRA_COLUMNS.items():
                 if column not in existing:
                     conn.exec_driver_sql(f"ALTER TABLE resources ADD COLUMN {column} {ddl}")
+
+            version_columns = {
+                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(versions)")
+            }
+            for column, ddl in _VERSION_EXTRA_COLUMNS.items():
+                if column not in version_columns:
+                    conn.exec_driver_sql(f"ALTER TABLE versions ADD COLUMN {column} {ddl}")
             conn.commit()
     except Exception:
         # 表还未创建（首次启动）时由 create_all 负责

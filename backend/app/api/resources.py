@@ -3,10 +3,12 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, List
 from app.models.database import get_db
 from app.models.resource import Resource, Version
 from app.core.config import settings
+from app.services.runtime_config import host_path
 from app.schemas.resource import (
     ResourceCreate,
     ResourceUpdate,
@@ -39,7 +41,11 @@ def _add_full_paths(versions: List[Version]) -> List[dict]:
             "file_size": v.file_size,
             "upload_date": v.upload_date,
             # 使用 NAS 真实路径而非容器内路径
-            "full_path": str(settings.nas_resource_path / v.file_path),
+            "full_path": str(
+                host_path(Path(v.root_path) if v.root_path else Path(settings.resource_dir))
+                / v.file_path
+            ),
+            "root_path": v.root_path,
         }
         result.append(v_dict)
     return result

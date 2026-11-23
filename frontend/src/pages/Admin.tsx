@@ -12,8 +12,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowLeft, RefreshCw, Loader2 } from "lucide-react"
-import { api } from "@/services/api"
+import { ArrowLeft, RefreshCw, Loader2, HardDrive, FolderInput } from "lucide-react"
+import { api, type ImportResult, type StorageInfo } from "@/services/api"
+import { PathPicker } from "@/components/PathPicker"
 import { platformConfig } from "@/lib/theme"
 
 interface ScanResult {
@@ -31,6 +32,13 @@ export function Admin() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
 
+  // 资源路径设置
+  const [storage, setStorage] = useState<StorageInfo | null>(null)
+  const [picker, setPicker] = useState<null | "library" | "import">(null)
+  const [pathBusy, setPathBusy] = useState(false)
+  const [pathError, setPathError] = useState("")
+  const [importResult, setImportResult] = useState<ImportResult | null>(null)
+
   // 上传队列
   const [queue, setQueue] = useState<UploadItem[]>([])
   const queueRef = useRef<UploadItem[]>([])
@@ -41,6 +49,40 @@ export function Admin() {
   useEffect(() => {
     fetchResources()
   }, [fetchResources])
+
+  const loadStorage = async () => {
+    try {
+      setStorage(await api.getStorage())
+    } catch (error) {
+      setPathError(error instanceof Error ? error.message : "读取路径信息失败")
+    }
+  }
+
+  useEffect(() => {
+    loadStorage()
+  }, [])
+
+  const handlePickPath = async (path: string) => {
+    setPathBusy(true)
+    setPathError("")
+    try {
+      if (picker === "library") {
+        const info = await api.setLibraryRoot(path)
+        setStorage(info)
+        await fetchResources()
+      } else {
+        const result = await api.importFromPath(path)
+        setImportResult(result)
+        await loadStorage()
+        await fetchResources()
+      }
+      setPicker(null)
+    } catch (error) {
+      setPathError(error instanceof Error ? error.message : "操作失败")
+    } finally {
+      setPathBusy(false)
+    }
+  }
 
   // 队列状态同时保存在 ref 里，异步上传循环里始终能读到最新值
   const setItems = (next: UploadItem[]) => {
@@ -229,6 +271,78 @@ export function Admin() {
           </Button>
           <h1 className="text-3xl font-bold">管理页面</h1>
         </div>
+
+        {/* 资源路径 */}
+        <div className="mb-8 rounded-lg border bg-card p-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="flex items-center gap-2 text-base font-semibold">
+                <HardDrive className="h-4 w-4 text-muted-foreground" />
+                资源路径
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                资源目录：
+                <span className="ml-1 font-mono text-foreground">
+                  {storage?.library_root_host || "加载中…"}
+                </span>
+                {storage && (
+                  <span className="ml-2 text-xs text-muted-foreground/70">
+                    容器内 {storage.library_root}
+                  </span>
+                )}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                上传与导入保存到：
+                <span className="ml-1 font-mono text-foreground">
+                  {storage?.upload_template || "…"}
+                </span>
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPicker("library")}>
+                更改资源目录
+              </Button>
+              <Button size="sm" onClick={() => setPicker("import")}>
+                <FolderInput className="mr-2 h-4 w-4" />
+                从 NAS 导入…
+              </Button>
+            </div>
+          </div>
+
+          {pathError && <p className="mt-3 text-sm text-destructive">{pathError}</p>}
+
+          {importResult && (
+            <div className="mt-3 rounded-md border bg-muted/40 p-3 text-sm">
+              <p className="font-medium">导入完成</p>
+              <p className="mt-1 text-muted-foreground">
+                移动 {importResult.moved} 个文件，跳过 {importResult.skipped} 个；扫描入库 新增{" "}
+                {importResult.created}、更新 {importResult.updated}。
+              </p>
+              {importResult.errors.length > 0 && (
+                <p className="mt-1 text-destructive">失败 {importResult.errors.length} 个：{importResult.errors[0]}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <PathPicker
+          open={picker !== null}
+          title={picker === "library" ? "更改资源目录" : "从 NAS 导入"}
+          confirmLabel={picker === "library" ? "使用此目录" : "导入到此目录"}
+          initialPath={
+            picker === "library"
+              ? storage?.library_root
+              : storage?.volumes[0] || "/vol2"
+          }
+          hint={
+            picker === "library"
+              ? "扫描、上传、导入都会使用这个目录"
+              : "导入会把目录里的安装包移动到资源目录的对应平台子目录，然后重新扫描"
+          }
+          busy={pathBusy}
+          onClose={() => setPicker(null)}
+          onConfirm={handlePickPath}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
           {/* 上传区域 */}

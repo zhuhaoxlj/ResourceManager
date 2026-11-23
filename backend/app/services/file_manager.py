@@ -23,15 +23,18 @@ class FileManager:
             (self.resource_dir / platform.capitalize()).mkdir(parents=True, exist_ok=True)
 
     async def save_upload_file(
-        self, upload_file: UploadFile, platform: str
+        self, upload_file: UploadFile, platform: str, base_dir: Optional[Path] = None
     ) -> tuple[str, int]:
-        """保存上传的资源文件"""
+        """保存上传的资源文件（默认落在资源目录，可指定其它根目录）"""
         # 验证平台
         if platform not in settings.platforms:
             raise HTTPException(status_code=400, detail=f"不支持的平台: {platform}")
 
+        base = Path(base_dir) if base_dir else self.resource_dir
+        base.mkdir(parents=True, exist_ok=True)
+
         # 创建平台目录
-        platform_dir = self.resource_dir / platform.capitalize()
+        platform_dir = base / platform.capitalize()
         platform_dir.mkdir(parents=True, exist_ok=True)
 
         # 生成文件路径
@@ -48,7 +51,7 @@ class FileManager:
             with file_path.open("wb") as f:
                 shutil.copyfileobj(upload_file.file, f)
             file_size = file_path.stat().st_size
-            return str(file_path.relative_to(self.resource_dir)), file_size
+            return str(file_path.relative_to(base)), file_size
         finally:
             upload_file.file.close()
 
@@ -81,16 +84,16 @@ class FileManager:
         finally:
             upload_file.file.close()
 
-    def get_file_path(self, relative_path: str) -> Path:
+    def get_file_path(self, relative_path: str, root: Optional[Path] = None) -> Path:
         """获取文件完整路径"""
-        file_path = self.resource_dir / relative_path
+        file_path = (Path(root) if root else self.resource_dir) / relative_path
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="文件不存在")
         return file_path
 
-    def delete_file(self, relative_path: str) -> bool:
+    def delete_file(self, relative_path: str, root: Optional[Path] = None) -> bool:
         """删除文件"""
-        file_path = self.resource_dir / relative_path
+        file_path = (Path(root) if root else self.resource_dir) / relative_path
         if file_path.exists():
             file_path.unlink()
             return True

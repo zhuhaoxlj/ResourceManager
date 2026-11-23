@@ -41,8 +41,19 @@ class Version(Base):
     resource_id = Column(Integer, ForeignKey("resources.id"), nullable=False)
     version = Column(String(100), nullable=False)
     file_path = Column(String(500), nullable=False)
+    # 文件所在的资源根目录（容器内路径），换资源目录后旧版本仍能定位
+    root_path = Column(String(500), nullable=True)
     file_size = Column(BigInteger, nullable=True)
     upload_date = Column(DateTime(timezone=True), server_default=func.now())
 
     # 关联资源
     resource = relationship("Resource", back_populates="versions")
+
+
+class AppConfig(Base):
+    """运行时可改的配置（资源目录等）"""
+
+    __tablename__ = "app_config"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=True)

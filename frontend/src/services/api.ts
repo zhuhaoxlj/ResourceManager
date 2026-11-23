@@ -38,6 +38,36 @@ export interface ResourceListResponse {
   items: Resource[]
 }
 
+export interface StorageInfo {
+  library_root: string
+  library_root_host: string
+  upload_template: string
+  volumes: string[]
+}
+
+export interface BrowseEntry {
+  name: string
+  path: string
+}
+
+export interface BrowseResult {
+  path: string
+  host_path: string
+  parent?: string | null
+  entries: BrowseEntry[]
+}
+
+export interface ImportResult {
+  source: string
+  library_root: string
+  moved: number
+  skipped: number
+  errors: string[]
+  scanned: number
+  created: number
+  updated: number
+}
+
 export interface ScanStats {
   [platform: string]: number
 }
@@ -173,6 +203,23 @@ export const api = {
     } catch {
       return { exists: false }
     }
+  },
+
+  // 资源路径
+  getStorage: (): Promise<StorageInfo> => {
+    return apiClient.get("/storage/")
+  },
+
+  browsePath: (path: string): Promise<BrowseResult> => {
+    return apiClient.get("/storage/browse", { params: { path } })
+  },
+
+  setLibraryRoot: (path: string): Promise<StorageInfo> => {
+    return apiClient.put("/storage/library-root", { path })
+  },
+
+  importFromPath: (path: string): Promise<ImportResult> => {
+    return apiClient.post("/storage/import", { path })
   },
 
   // 扫描

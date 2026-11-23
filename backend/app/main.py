@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.core.config import get_settings
 from app.models.database import init_db
-from app.api import resources, upload, scan, download, static
+from app.api import resources, upload, scan, download, static, storage
 
 settings = get_settings()
 
@@ -34,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(scan.router, prefix="/api/v1")
     app.include_router(download.router, prefix="/api/v1")
     app.include_router(static.router, prefix="/api/v1")
+    app.include_router(storage.router, prefix="/api/v1")
 
     # 挂载静态文件目录
     (settings.upload_dir / "covers").mkdir(parents=True, exist_ok=True)

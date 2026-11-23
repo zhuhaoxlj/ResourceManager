@@ -260,8 +260,11 @@ class DirectoryScanner:
                 synchronize_session=False
             )
 
-    def index_file(self, db: Session, file_path: Path, relative_path: str) -> str:
+    def index_file(
+        self, db: Session, file_path: Path, relative_path: str, root: Optional[Path] = None
+    ) -> str:
         """把一个文件登记到数据库，返回 created / updated。"""
+        root = Path(root) if root else self.base_path
         filename = file_path.name
         platform = self.detect_platform(filename)
         if not platform:
@@ -286,7 +289,12 @@ class DirectoryScanner:
             resource_name = (meta.get("label") or resource_name).strip() or resource_name
 
         existing_version = (
-            db.query(Version).filter(Version.file_path == relative_path).first()
+            db.query(Version)
+            .filter(
+                Version.file_path == relative_path,
+                or_(Version.root_path == str(root), Version.root_path.is_(None)),
+            )
+            .first()
         )
         resource = self._find_resource(db, platform, resource_name, meta, existing_version)
 
@@ -319,6 +327,7 @@ class DirectoryScanner:
                     resource_id=resource.id,
                     version=version,
                     file_path=relative_path,
+                    root_path=str(root),
                     file_size=file_size,
                 )
             )
@@ -353,7 +362,7 @@ class DirectoryScanner:
 
                 try:
                     relative_path = str(file_path.relative_to(self.base_path))
-                    status = self.index_file(db, file_path, relative_path)
+                    status = self.index_file(db, file_path, relative_path, self.base_path)
                     if status == "created":
                         result.created += 1
                     elif status == "updated":

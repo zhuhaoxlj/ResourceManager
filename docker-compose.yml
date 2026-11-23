@@ -16,6 +16,10 @@ services:
       - "${API_PORT:-8787}"
     volumes:
       - ${NAS_RESOURCE_PATH}:/app/resources
+      # 整卷挂载（按相同路径），目录浏览器里可以选这些卷下的任意目录
+      - ${NAS_VOL1:-/vol1}:/vol1
+      - ${NAS_VOL2:-/vol2}:/vol2
+      - ${NAS_VOL3:-/vol3}:/vol3
       - ./data/db:/app/data
       - ./data/uploads:/app/uploads
     environment:
