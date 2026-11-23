@@ -13,8 +13,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ArrowLeft, RefreshCw, Loader2, HardDrive, FolderInput, FolderPlus, X } from "lucide-react"
-import { api, type ImportMode, type ImportResult, type StorageInfo } from "@/services/api"
+import { api, type ImportJob, type ImportMode, type ImportResult, type StorageInfo } from "@/services/api"
 import { PathPicker } from "@/components/PathPicker"
+import { formatFileSize } from "@/lib/utils"
 import { platformConfig } from "@/lib/theme"
 
 interface ScanResult {
@@ -23,6 +24,17 @@ interface ScanResult {
   created: number
   updated: number
   errors: string[]
+}
+
+const importPhaseLabel: Record<ImportJob["phase"], string> = {
+  queued: "等待当前磁盘任务完成",
+  preparing: "统计源目录文件",
+  copying: "跨卷复制文件",
+  indexing: "登记资源",
+  cleanup: "清理源卷暂存目录",
+  rollback: "恢复源目录",
+  complete: "导入完成",
+  failed: "导入失败",
 }
 
 export function Admin() {
@@ -39,6 +51,9 @@ export function Admin() {
   const [pathError, setPathError] = useState("")
   const [importPlatform, setImportPlatform] = useState("")
   const [importMode, setImportMode] = useState<ImportMode>("files")
+  const [importJob, setImportJob] = useState<ImportJob | null>(null)
+  const [importStatusError, setImportStatusError] = useState(false)
+  const activeImportId = importJob && !["complete", "failed"].includes(importJob.phase) ? importJob.id : null
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
 
   // 上传队列
@@ -64,6 +79,52 @@ export function Admin() {
     loadStorage()
   }, [])
 
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout>
+    const readJob = async () => {
+      try {
+        const job = await api.getCurrentImport()
+        if (disposed) return
+        setImportStatusError(false)
+        if (!activeImportId) {
+          if (job && !["complete", "failed"].includes(job.phase)) {
+            setImportJob(job)
+            setPicker("import")
+          }
+          return
+        }
+        if (!job || job.id !== activeImportId) {
+          setImportJob(null)
+          setPathError("暂时找不到这笔任务，请检查源目录和目标目录后再试")
+          return
+        }
+        setImportJob(job)
+        if (job.phase === "complete") {
+          setImportResult(job.result ?? null)
+          setPicker(null)
+          void loadStorage()
+          void fetchResources()
+          return
+        }
+        if (job.phase === "failed") {
+          setPathError(job.error ?? "导入失败")
+          return
+        }
+      } catch {
+        if (disposed) return
+        if (!activeImportId) return
+        setImportStatusError(true)
+      }
+      timer = setTimeout(readJob, 1000)
+    }
+    void readJob()
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+    }
+  }, [activeImportId, fetchResources])
+
   const handleRemoveScanRoot = async (path: string) => {
     setPathBusy(true)
     setPathError("")
@@ -81,6 +142,7 @@ export function Admin() {
     setImportMode("files")
     setPathError("")
     setImportResult(null)
+    setImportJob(null)
     setPicker("import")
   }
 
@@ -95,10 +157,8 @@ export function Admin() {
       } else if (picker === "scan") {
         setStorage(await api.addScanRoot(path))
       } else {
-        const result = await api.importFromPath(path, importPlatform, importMode)
-        setImportResult(result)
-        await loadStorage()
-        await fetchResources()
+        setImportJob(await api.startImport(path, importPlatform, importMode))
+        return
       }
       setPicker(null)
     } catch (error) {
@@ -364,7 +424,7 @@ export function Admin() {
                 ? "文件留在原处，只登记到资源库"
                 : "选择源目录和目标平台。移动完成后，原目录会被移除。"
           }
-          busy={pathBusy}
+          busy={pathBusy || !!activeImportId}
           confirmDisabled={picker === "import" && !importPlatform}
           volumes={storage?.volumes}
           onClose={() => setPicker(null)}
@@ -375,7 +435,7 @@ export function Admin() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="import-platform">目标平台</Label>
-                  <Select value={importPlatform} onValueChange={setImportPlatform} disabled={pathBusy}>
+                  <Select value={importPlatform} onValueChange={setImportPlatform} disabled={pathBusy || !!activeImportId}>
                     <SelectTrigger id="import-platform"><SelectValue placeholder="选择平台" /></SelectTrigger>
                     <SelectContent>
                       {Object.entries(platformConfig).map(([key, config]) => (
@@ -386,7 +446,7 @@ export function Admin() {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="import-mode">登记方式</Label>
-                  <Select value={importMode} onValueChange={(value: ImportMode) => setImportMode(value)} disabled={pathBusy}>
+                  <Select value={importMode} onValueChange={(value: ImportMode) => setImportMode(value)} disabled={pathBusy || !!activeImportId}>
                     <SelectTrigger id="import-mode"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="files">逐文件登记</SelectItem>
@@ -399,6 +459,35 @@ export function Admin() {
                 {importPlatform && `${storage?.library_root_host ?? ""}/${importPlatform[0].toUpperCase()}${importPlatform.slice(1)}/ · `}
                 {importMode === "folder" ? "保留目录结构，适用于便携应用。下载时打包为 ZIP。" : "保留目录结构，所有文件都归入所选平台。"}
               </p>
+              {activeImportId && importJob && (
+                <div className="space-y-2 rounded-md bg-muted p-3 text-sm">
+                  <div role="status" className="flex flex-wrap justify-between gap-1">
+                    <span className="font-medium">{importPhaseLabel[importJob.phase]}</span>
+                    {importJob.phase === "copying" && (
+                      <span className="tabular-nums">
+                        {formatFileSize(importJob.bytes_done)} / {formatFileSize(importJob.bytes_total)}
+                        {importJob.bytes_total > 0 && ` · ${Math.min(100, importJob.bytes_done / importJob.bytes_total * 100).toFixed(1)}%`}
+                      </span>
+                    )}
+                  </div>
+                  <progress
+                    aria-label={importPhaseLabel[importJob.phase]}
+                    className="block h-2 w-full accent-primary"
+                    max={importJob.phase === "indexing" ? importJob.registration_total || 1 : importJob.bytes_total || 1}
+                    value={importJob.phase === "indexing" ? importJob.registered ?? 0 :
+                      importJob.phase === "copying" && importJob.bytes_total ? importJob.bytes_done : undefined}
+                  />
+                  {importJob.phase === "copying" && (
+                    <p className="text-xs text-muted-foreground">已复制 {importJob.files_done} / {importJob.files_total} 个文件</p>
+                  )}
+                  {importJob.phase === "indexing" && (
+                    <p className="text-xs text-muted-foreground">已登记 {importJob.registered} / {importJob.registration_total} 项</p>
+                  )}
+                  <p className="break-all text-xs text-muted-foreground">源目录 {importJob.source}</p>
+                  {importJob.current_file && <p className="break-all text-xs text-muted-foreground">{importJob.current_file}</p>}
+                  {importStatusError && <p className="text-xs text-muted-foreground">进度连接暂时中断，正在重新连接。</p>}
+                </div>
+              )}
               {pathError && <p role="alert" className="text-sm text-destructive">{pathError}</p>}
             </div>
           )}
@@ -444,7 +533,7 @@ export function Admin() {
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-xl font-semibold">目录扫描</h2>
-              <Button size="sm" onClick={openImportPicker} disabled={!storage || pathBusy || isScanning}>
+              <Button size="sm" onClick={openImportPicker} disabled={!storage || pathBusy || !!activeImportId || isScanning}>
                 <FolderInput className="mr-2 h-4 w-4" />
                 从 NAS 移动导入
               </Button>

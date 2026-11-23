@@ -73,6 +73,21 @@ export interface ImportResult {
   updated: number
 }
 
+export interface ImportJob {
+  id: string
+  source: string
+  phase: "queued" | "preparing" | "copying" | "indexing" | "cleanup" | "rollback" | "complete" | "failed"
+  bytes_done: number
+  bytes_total: number
+  files_done: number
+  files_total: number
+  current_file?: string | null
+  registered?: number
+  registration_total?: number
+  result?: ImportResult
+  error?: string
+}
+
 export interface ScanStats {
   [platform: string]: number
 }
@@ -231,8 +246,12 @@ export const api = {
     return apiClient.delete("/storage/scan-roots", { params: { path } })
   },
 
-  importFromPath: (path: string, platform: string, mode: ImportMode): Promise<ImportResult> => {
-    return apiClient.post("/storage/import", { path, platform, mode })
+  startImport: (path: string, platform: string, mode: ImportMode): Promise<ImportJob> => {
+    return apiClient.post("/storage/import-jobs", { path, platform, mode })
+  },
+
+  getCurrentImport: (): Promise<ImportJob | null> => {
+    return apiClient.get("/storage/import-jobs/current")
   },
 
   // 扫描

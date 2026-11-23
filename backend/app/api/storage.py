@@ -3,16 +3,19 @@
 import errno
 import os
 import shutil
+from collections.abc import Callable
+from threading import Lock
+from uuid import uuid4
 from tempfile import mkdtemp
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.database import get_db
+from app.models.database import SessionLocal, get_db
 from app.models.resource import Version
 from app.services.runtime_config import (
     get_library_root,
@@ -197,6 +200,48 @@ def _writable(path: Path) -> bool:
     return os.access(path, os.W_OK)
 
 
+_import_job_lock = Lock()
+_import_job: dict | None = None
+_terminal_phases = {"complete", "failed"}
+
+
+def _run_import_job(payload: ImportPayload) -> None:
+    def report(**fields):
+        with _import_job_lock:
+            _import_job.update(fields)
+
+    try:
+        with SessionLocal() as db, library_operation_lock:
+            result = _move_into_library(payload, db, report)
+    except HTTPException as exc:
+        report(phase="failed", error=str(exc.detail))
+    except Exception:
+        report(phase="failed", error="导入中断，请检查 NAS 上的源目录和目标目录")
+    else:
+        report(phase="complete", result=result)
+
+
+@router.get("/import-jobs/current")
+def current_import_job():
+    with _import_job_lock:
+        return dict(_import_job) if _import_job else None
+
+
+@router.post("/import-jobs", status_code=202)
+def start_import_job(payload: ImportPayload, tasks: BackgroundTasks):
+    global _import_job
+    with _import_job_lock:
+        if _import_job and _import_job["phase"] not in _terminal_phases:
+            raise HTTPException(status_code=409, detail="已有导入任务在运行")
+        _import_job = {
+            "id": uuid4().hex, "source": payload.path, "phase": "queued",
+            "bytes_done": 0, "bytes_total": 0, "files_done": 0, "files_total": 0,
+        }
+        job = dict(_import_job)
+    tasks.add_task(_run_import_job, payload)
+    return job
+
+
 @router.post("/import")
 def import_from_path(payload: ImportPayload, db: Session = Depends(get_db)):
     """移动整个目录。可逐文件登记，或把目录作为一条资源登记。"""
@@ -204,7 +249,14 @@ def import_from_path(payload: ImportPayload, db: Session = Depends(get_db)):
         return _move_into_library(payload, db)
 
 
-def _move_into_library(payload: ImportPayload, db: Session):
+def _move_into_library(
+    payload: ImportPayload, db: Session, report: Callable[..., None] | None = None,
+):
+    if report is None:
+        def report(**fields):
+            pass
+
+    report(phase="preparing")
     if payload.platform not in settings.platforms:
         raise HTTPException(status_code=400, detail="请选择有效的导入平台")
     source = _check_path(db, payload.path)
@@ -229,6 +281,8 @@ def _move_into_library(payload: ImportPayload, db: Session):
         if not files:
             raise HTTPException(status_code=400, detail="所选目录没有文件")
 
+        total_bytes = sum(size for _, size in files)
+        report(bytes_total=total_bytes, files_total=len(files))
         target_dir.mkdir(parents=True, exist_ok=True)
         for number in range(10_000):
             target = target_dir / (source.name if number == 0 else f"{source.name} ({number})")
@@ -255,7 +309,30 @@ def _move_into_library(payload: ImportPayload, db: Session):
                 raise
             staging = Path(mkdtemp(prefix=".resource-import-", dir=source.parent))
             source.rename(staging / source.name)
-            shutil.copytree(staging / source.name, target, dirs_exist_ok=True, symlinks=True)
+            report(phase="copying")
+            copied = completed = 0
+            staged_source = staging / source.name
+
+            def copy_with_progress(src, dst):
+                nonlocal copied, completed
+                report(current_file=str(Path(src).relative_to(staged_source)))
+                with open(src, "rb") as reader, open(dst, "xb") as writer:
+                    while chunk := reader.read(8 * 1024 * 1024):
+                        writer.write(chunk)
+                        copied += len(chunk)
+                        report(bytes_done=copied)
+                shutil.copystat(src, dst)
+                completed += 1
+                report(files_done=completed)
+                return dst
+
+            shutil.copytree(staged_source, target, dirs_exist_ok=True, symlinks=True, copy_function=copy_with_progress)
+
+        registration_total = 1 if payload.mode == "folder" else len(files)
+        report(
+            phase="indexing", bytes_done=total_bytes, files_done=len(files), current_file=None,
+            registered=0, registration_total=registration_total,
+        )
 
         # 已经原地登记的版本一并更新到移动后的路径，保留旧下载链接。
         for version in db.query(Version):
@@ -265,8 +342,9 @@ def _move_into_library(payload: ImportPayload, db: Session):
                 version.root_path = str(root)
                 version.file_path = str((target / old_path.relative_to(source_host)).relative_to(root))
         db.flush()
-        entries = [(Path(), sum(size for _, size in files))] if payload.mode == "folder" else files
-        for relative, size in entries:
+        entries = [(Path(), total_bytes)] if payload.mode == "folder" else files
+        for index, (relative, size) in enumerate(entries, start=1):
+            report(current_file=str(relative) if relative.parts else source.name)
             item = target / relative
             status = scanner.index_file(
                 db, item, str(item.relative_to(root)), root, platform_override=payload.platform,
@@ -274,12 +352,14 @@ def _move_into_library(payload: ImportPayload, db: Session):
             )
             created += status == "created"
             updated += status == "updated"
+            report(registered=index)
         scan_roots = get_scan_roots(db)
         remaining = [path for path in scan_roots if not _is_within(host_path(path).resolve(), source_host)]
         if remaining != scan_roots:
             set_scan_roots(db, remaining, commit=False)
         db.commit()
     except Exception as exc:
+        report(phase="rollback", current_file=None)
         db.rollback()
         try:
             restore = staging / source.name if staging else None
@@ -299,6 +379,7 @@ def _move_into_library(payload: ImportPayload, db: Session):
 
     errors = []
     if staging:
+        report(phase="cleanup", current_file=None)
         try:
             shutil.rmtree(staging)
         except OSError as exc:
