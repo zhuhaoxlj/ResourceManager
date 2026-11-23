@@ -11,7 +11,9 @@ services:
         # pip/uv 镜像源，留空使用官方源
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     container_name: resource-manager-backend
-    network_mode: host
+    # 只在 compose 内网暴露，由前端容器反代 /api，不占用宿主端口
+    expose:
+      - "${API_PORT:-8787}"
     volumes:
       - ${NAS_RESOURCE_PATH}:/app/resources
       - ./data/db:/app/data
@@ -42,10 +44,12 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-        # 浏览器访问后端用的地址，必须是外部可访问的地址
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:8787/api/v1}
+        # 留空 = 使用同源相对路径 /api/v1，端口/域名随便换都不用重新构建
+        VITE_API_URL: ${VITE_API_URL:-}
     container_name: resource-manager-frontend
-    network_mode: host
+    # 发布端口后飞牛容器面板才会出现「打开」链接，局域网 / 公网都用这个端口
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
       - backend
     restart: unless-stopped

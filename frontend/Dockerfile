@@ -3,7 +3,7 @@ ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
 # 接收API地址参数
-ARG VITE_API_URL=http://localhost:8787/api/v1
+ARG VITE_API_URL=
 
 # 使用官方 Node.js 镜像
 FROM node:20-alpine
@@ -12,7 +12,7 @@ FROM node:20-alpine
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
-ARG VITE_API_URL=http://localhost:8787/api/v1
+ARG VITE_API_URL=
 
 # 设置环境变量
 ENV HTTP_PROXY=${HTTP_PROXY}
