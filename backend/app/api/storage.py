@@ -13,8 +13,10 @@ from app.core.config import get_settings
 from app.models.database import get_db
 from app.services.runtime_config import (
     get_library_root,
+    get_scan_roots,
     host_path,
     set_library_root,
+    set_scan_roots,
 )
 from app.services.scanner import DirectoryScanner
 
@@ -80,16 +82,63 @@ def _detect_platform(filename: str) -> Optional[str]:
     return None
 
 
-@router.get("/")
-def storage_info(db: Session = Depends(get_db)):
-    """当前资源目录与可浏览的卷。"""
+def _storage_payload(db: Session) -> dict:
     root = get_library_root(db)
     return {
         "library_root": str(root),
         "library_root_host": str(host_path(root)),
         "upload_template": f"{host_path(root)}/<平台>/",
         "volumes": [str(item) for item in VOLUME_ROOTS if item.exists()],
+        "scan_roots": [
+            {"path": str(item), "host_path": str(host_path(item))}
+            for item in get_scan_roots(db)
+        ],
     }
+
+
+@router.get("/")
+def storage_info(db: Session = Depends(get_db)):
+    """当前资源目录、额外扫描目录与可浏览的卷。"""
+    return _storage_payload(db)
+
+
+@router.post("/scan-roots")
+def add_scan_root(payload: PathPayload, db: Session = Depends(get_db)):
+    """把一个 NAS 目录加进扫描列表（原地登记，不移动文件）。"""
+    target = _check_path(db, payload.path)
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=400, detail="目录不存在")
+
+    library_root = get_library_root(db).resolve()
+    if target == library_root or library_root in target.parents:
+        raise HTTPException(status_code=400, detail="该目录已在资源库内，无需重复添加")
+
+    roots = [item.resolve() for item in get_scan_roots(db)]
+    if target in roots:
+        raise HTTPException(status_code=400, detail="该目录已在扫描列表中")
+    if any(target in root.parents for root in roots):
+        raise HTTPException(status_code=400, detail="该目录已包含在现有的扫描目录中")
+
+    roots = [item for item in roots if item not in target.parents]
+    roots.append(target)
+    set_scan_roots(db, roots)
+    return _storage_payload(db)
+
+
+@router.delete("/scan-roots")
+def remove_scan_root(path: str = Query(..., description="要移除的扫描目录"), db: Session = Depends(get_db)):
+    """从扫描列表里移除一个目录（不影响已经入库的资源）。"""
+    try:
+        target = Path(path).resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail="路径无效")
+
+    roots = [item.resolve() for item in get_scan_roots(db)]
+    if target not in roots:
+        raise HTTPException(status_code=404, detail="该目录不在扫描列表中")
+
+    set_scan_roots(db, [item for item in roots if item != target])
+    return _storage_payload(db)
 
 
 @router.get("/browse")

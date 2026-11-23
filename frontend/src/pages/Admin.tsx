@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowLeft, RefreshCw, Loader2, HardDrive, FolderInput } from "lucide-react"
+import { ArrowLeft, RefreshCw, Loader2, HardDrive, FolderInput, FolderPlus, X } from "lucide-react"
 import { api, type ImportResult, type StorageInfo } from "@/services/api"
 import { PathPicker } from "@/components/PathPicker"
 import { platformConfig } from "@/lib/theme"
@@ -34,7 +34,7 @@ export function Admin() {
 
   // 资源路径设置
   const [storage, setStorage] = useState<StorageInfo | null>(null)
-  const [picker, setPicker] = useState<null | "library" | "import">(null)
+  const [picker, setPicker] = useState<null | "library" | "import" | "scan">(null)
   const [pathBusy, setPathBusy] = useState(false)
   const [pathError, setPathError] = useState("")
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
@@ -62,6 +62,18 @@ export function Admin() {
     loadStorage()
   }, [])
 
+  const handleRemoveScanRoot = async (path: string) => {
+    setPathBusy(true)
+    setPathError("")
+    try {
+      setStorage(await api.removeScanRoot(path))
+    } catch (error) {
+      setPathError(error instanceof Error ? error.message : "移除失败")
+    } finally {
+      setPathBusy(false)
+    }
+  }
+
   const handlePickPath = async (path: string) => {
     setPathBusy(true)
     setPathError("")
@@ -70,6 +82,8 @@ export function Admin() {
         const info = await api.setLibraryRoot(path)
         setStorage(info)
         await fetchResources()
+      } else if (picker === "scan") {
+        setStorage(await api.addScanRoot(path))
       } else {
         const result = await api.importFromPath(path)
         setImportResult(result)
@@ -327,17 +341,21 @@ export function Admin() {
 
         <PathPicker
           open={picker !== null}
-          title={picker === "library" ? "更改资源目录" : "从 NAS 导入"}
-          confirmLabel={picker === "library" ? "使用此目录" : "导入到此目录"}
+          title={
+            picker === "library" ? "更改资源目录" : picker === "scan" ? "添加扫描目录" : "从 NAS 导入"
+          }
+          confirmLabel={
+            picker === "library" ? "使用此目录" : picker === "scan" ? "添加为扫描目录" : "导入到此目录"
+          }
           initialPath={
-            picker === "library"
-              ? storage?.library_root
-              : storage?.volumes[0] || "/vol2"
+            picker === "library" ? storage?.library_root : storage?.volumes[0] || "/vol2"
           }
           hint={
             picker === "library"
               ? "扫描、上传、导入都会使用这个目录"
-              : "导入会把目录里的安装包移动到资源目录的对应平台子目录，然后重新扫描"
+              : picker === "scan"
+                ? "文件留在原处，只登记到资源库"
+                : "移动到资源目录并自动判断平台：.apk→Android、.dmg→Mac、.exe/.zip→Windows、.nsp/.nsz/.xci→Switch"
           }
           busy={pathBusy}
           onClose={() => setPicker(null)}
@@ -384,8 +402,40 @@ export function Admin() {
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">目录扫描</h2>
             <p className="text-muted-foreground text-sm">
-              扫描资源目录，自动识别新文件并更新数据库
+              原地登记，不移动文件。资源目录中的文件默认已包含，可以再加其它 NAS 目录（比如 Switch 游戏目录）。
             </p>
+
+            <div className="rounded-lg border bg-card p-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium">扫描目录</span>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setPicker("scan")}>
+                  <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
+                  添加目录
+                </Button>
+              </div>
+              <ul className="mt-2 space-y-1">
+                <li className="flex items-center gap-2 text-muted-foreground">
+                  <span className="truncate font-mono text-xs">{storage?.library_root_host || "…"}</span>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px]">资源目录</span>
+                </li>
+                {storage?.scan_roots.map((root) => (
+                  <li key={root.path} className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={root.host_path}>
+                      {root.host_path}
+                    </span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      onClick={() => handleRemoveScanRoot(root.path)}
+                      aria-label="移除该扫描目录"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             <Button
               onClick={handleScan}
               disabled={isScanning}

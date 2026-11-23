@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.services.scanner import DirectoryScanner
-from app.services.runtime_config import get_library_root
+from app.services.runtime_config import get_library_root, get_scan_roots
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
@@ -10,8 +10,9 @@ router = APIRouter(prefix="/scan", tags=["scan"])
 @router.post("/")
 async def scan_directory(db: Session = Depends(get_db)):
     """扫描目录并返回结果"""
-    scanner = DirectoryScanner(get_library_root(db))
-    result = scanner.scan_directory(db)
+    library_root = get_library_root(db)
+    scanner = DirectoryScanner(library_root)
+    result = scanner.scan_directory(db, [library_root, *get_scan_roots(db)])
 
     return {
         "message": "扫描完成",

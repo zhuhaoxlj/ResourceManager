@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -334,41 +334,39 @@ class DirectoryScanner:
 
         return status
 
-    def scan_directory(self, db: Session) -> ScanResult:
-        """扫描目录并更新数据库"""
+    def scan_directory(self, db: Session, roots: Optional[List[Path]] = None) -> ScanResult:
+        """扫描一个或多个根目录并更新数据库。
+
+        roots 为空时只扫描构造时的 base_path；多个根都会各自记录 root_path，
+        文件不移动，属于「原地登记」。
+        """
         result = ScanResult(scanned=0, created=0, updated=0, errors=[])
 
-        if not self.base_path.exists():
-            result.errors.append(f"目录不存在: {self.base_path}")
-            return result
+        candidates: List[Path] = []
+        for item in roots or [self.base_path]:
+            root = Path(item)
+            if not root.exists() or not root.is_dir():
+                result.errors.append(f"目录不存在: {root}")
+                continue
+            candidates.append(root.resolve())
+
+        # 去掉重复和「已被其它根包含」的目录，避免重复扫描
+        unique: List[Path] = []
+        for root in candidates:
+            if str(root) in (str(item) for item in unique):
+                continue
+            if any(root != other and other in root.parents for other in unique):
+                continue
+            unique = [item for item in unique if not (item != root and root in item.parents)]
+            unique.append(root)
 
         # 收集所有支持的扩展名
         all_extensions: Set[str] = set()
         for extensions in settings.platform_extensions.values():
             all_extensions.update(extensions)
 
-        # 使用 os.walk 进行更高效的遍历
-        for root, dirs, files in os.walk(self.base_path):
-            # 过滤掉不需要扫描的目录（修改 dirs 会影响后续遍历）
-            dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS]
-
-            for filename in files:
-                ext = Path(filename).suffix.lower()
-                if ext not in all_extensions:
-                    continue
-
-                file_path = Path(root) / filename
-                result.scanned += 1
-
-                try:
-                    relative_path = str(file_path.relative_to(self.base_path))
-                    status = self.index_file(db, file_path, relative_path, self.base_path)
-                    if status == "created":
-                        result.created += 1
-                    elif status == "updated":
-                        result.updated += 1
-                except Exception as e:
-                    result.errors.append(f"处理文件 {file_path} 时出错: {str(e)}")
+        for root in unique:
+            self._scan_root(db, root, all_extensions, result)
 
         try:
             db.commit()
@@ -378,6 +376,30 @@ class DirectoryScanner:
 
         self._save_cache()
         return result
+
+    def _scan_root(
+        self, db: Session, root: Path, all_extensions: Set[str], result: ScanResult
+    ) -> None:
+        for walk_root, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS]
+
+            for filename in files:
+                ext = Path(filename).suffix.lower()
+                if ext not in all_extensions:
+                    continue
+
+                file_path = Path(walk_root) / filename
+                result.scanned += 1
+
+                try:
+                    relative_path = str(file_path.relative_to(root))
+                    status = self.index_file(db, file_path, relative_path, root)
+                    if status == "created":
+                        result.created += 1
+                    elif status == "updated":
+                        result.updated += 1
+                except Exception as e:
+                    result.errors.append(f"处理文件 {file_path} 时出错: {str(e)}")
 
     def get_platform_stats(self, db: Session) -> dict[str, int]:
         """获取各平台资源统计"""

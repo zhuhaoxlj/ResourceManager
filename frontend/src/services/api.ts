@@ -38,11 +38,17 @@ export interface ResourceListResponse {
   items: Resource[]
 }
 
+export interface ScanRoot {
+  path: string
+  host_path: string
+}
+
 export interface StorageInfo {
   library_root: string
   library_root_host: string
   upload_template: string
   volumes: string[]
+  scan_roots: ScanRoot[]
 }
 
 export interface BrowseEntry {
@@ -216,6 +222,14 @@ export const api = {
 
   setLibraryRoot: (path: string): Promise<StorageInfo> => {
     return apiClient.put("/storage/library-root", { path })
+  },
+
+  addScanRoot: (path: string): Promise<StorageInfo> => {
+    return apiClient.post("/storage/scan-roots", { path })
+  },
+
+  removeScanRoot: (path: string): Promise<StorageInfo> => {
+    return apiClient.delete("/storage/scan-roots", { params: { path } })
   },
 
   importFromPath: (path: string): Promise<ImportResult> => {
