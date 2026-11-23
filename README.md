@@ -1,5 +1,7 @@
 # 资源管理系统
 
+> 项目主页：<https://zhuhaoxlj.github.io/ResourceManager/>
+
 一个现代化的多平台资源管理系统，用于统一管理 NAS 上的 Mac、Windows、Android、Switch 软件资源。
 
 ## 特性
