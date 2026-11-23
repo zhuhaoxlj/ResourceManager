@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ArrowLeft, RefreshCw, Loader2, HardDrive, FolderInput, FolderPlus, X } from "lucide-react"
-import { api, type ImportResult, type StorageInfo } from "@/services/api"
+import { api, type ImportMode, type ImportResult, type StorageInfo } from "@/services/api"
 import { PathPicker } from "@/components/PathPicker"
 import { platformConfig } from "@/lib/theme"
 
@@ -37,6 +37,8 @@ export function Admin() {
   const [picker, setPicker] = useState<null | "library" | "import" | "scan">(null)
   const [pathBusy, setPathBusy] = useState(false)
   const [pathError, setPathError] = useState("")
+  const [importPlatform, setImportPlatform] = useState("")
+  const [importMode, setImportMode] = useState<ImportMode>("files")
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
 
   // 上传队列
@@ -74,6 +76,14 @@ export function Admin() {
     }
   }
 
+  const openImportPicker = () => {
+    setImportPlatform("")
+    setImportMode("files")
+    setPathError("")
+    setImportResult(null)
+    setPicker("import")
+  }
+
   const handlePickPath = async (path: string) => {
     setPathBusy(true)
     setPathError("")
@@ -85,7 +95,7 @@ export function Admin() {
       } else if (picker === "scan") {
         setStorage(await api.addScanRoot(path))
       } else {
-        const result = await api.importFromPath(path)
+        const result = await api.importFromPath(path, importPlatform, importMode)
         setImportResult(result)
         await loadStorage()
         await fetchResources()
@@ -316,10 +326,6 @@ export function Admin() {
               <Button variant="outline" size="sm" onClick={() => setPicker("library")}>
                 更改资源目录
               </Button>
-              <Button size="sm" onClick={() => setPicker("import")}>
-                <FolderInput className="mr-2 h-4 w-4" />
-                从 NAS 导入…
-              </Button>
             </div>
           </div>
 
@@ -329,11 +335,12 @@ export function Admin() {
             <div className="mt-3 rounded-md border bg-muted/40 p-3 text-sm">
               <p className="font-medium">导入完成</p>
               <p className="mt-1 text-muted-foreground">
-                移动 {importResult.moved} 个文件，跳过 {importResult.skipped} 个；扫描入库 新增{" "}
+                已导入 {importResult.moved} 个文件，入库新增{" "}
                 {importResult.created}、更新 {importResult.updated}。
               </p>
+              <p className="mt-1 break-all font-mono text-xs">{importResult.destination}</p>
               {importResult.errors.length > 0 && (
-                <p className="mt-1 text-destructive">失败 {importResult.errors.length} 个：{importResult.errors[0]}</p>
+                <p className="mt-1 text-destructive">{importResult.errors[0]}</p>
               )}
             </div>
           )}
@@ -345,7 +352,7 @@ export function Admin() {
             picker === "library" ? "更改资源目录" : picker === "scan" ? "添加扫描目录" : "从 NAS 导入"
           }
           confirmLabel={
-            picker === "library" ? "使用此目录" : picker === "scan" ? "添加为扫描目录" : "导入到此目录"
+            picker === "library" ? "使用此目录" : picker === "scan" ? "添加为扫描目录" : "移动并导入"
           }
           initialPath={
             picker === "library" ? storage?.library_root : storage?.volumes[0] || "/vol2"
@@ -355,12 +362,47 @@ export function Admin() {
               ? "扫描、上传、导入都会使用这个目录"
               : picker === "scan"
                 ? "文件留在原处，只登记到资源库"
-                : "移动到资源目录并自动判断平台：.apk→Android、.dmg→Mac、.exe/.zip→Windows、.nsp/.nsz/.xci→Switch"
+                : "选择源目录和目标平台。移动完成后，原目录会被移除。"
           }
           busy={pathBusy}
+          confirmDisabled={picker === "import" && !importPlatform}
+          volumes={storage?.volumes}
           onClose={() => setPicker(null)}
           onConfirm={handlePickPath}
-        />
+        >
+          {picker === "import" && (
+            <div className="space-y-3 border-t px-5 py-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="import-platform">目标平台</Label>
+                  <Select value={importPlatform} onValueChange={setImportPlatform} disabled={pathBusy}>
+                    <SelectTrigger id="import-platform"><SelectValue placeholder="选择平台" /></SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(platformConfig).map(([key, config]) => (
+                        <SelectItem key={key} value={key}>{config.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="import-mode">登记方式</Label>
+                  <Select value={importMode} onValueChange={(value: ImportMode) => setImportMode(value)} disabled={pathBusy}>
+                    <SelectTrigger id="import-mode"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="files">逐文件登记</SelectItem>
+                      <SelectItem value="folder">整目录作为一条资源</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground break-all">
+                {importPlatform && `${storage?.library_root_host ?? ""}/${importPlatform[0].toUpperCase()}${importPlatform.slice(1)}/ · `}
+                {importMode === "folder" ? "保留目录结构，适用于便携应用。下载时打包为 ZIP。" : "保留目录结构，所有文件都归入所选平台。"}
+              </p>
+              {pathError && <p role="alert" className="text-sm text-destructive">{pathError}</p>}
+            </div>
+          )}
+        </PathPicker>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
           {/* 上传区域 */}
@@ -400,10 +442,14 @@ export function Admin() {
 
           {/* 扫描区域 */}
           <div className="space-y-4">
-            <h2 className="text-xl font-semibold">目录扫描</h2>
-            <p className="text-muted-foreground text-sm">
-              原地登记，不移动文件。资源目录中的文件默认已包含，可以再加其它 NAS 目录（比如 Switch 游戏目录）。
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-xl font-semibold">目录扫描</h2>
+              <Button size="sm" onClick={openImportPicker} disabled={!storage || pathBusy || isScanning}>
+                <FolderInput className="mr-2 h-4 w-4" />
+                从 NAS 移动导入
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">开始扫描会更新下列目录的资源记录。移动导入会将所选文件夹迁入资源目录。</p>
 
             <div className="rounded-lg border bg-card p-3 text-sm">
               <div className="flex items-center justify-between gap-2">

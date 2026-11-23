@@ -86,8 +86,9 @@ class FileManager:
 
     def get_file_path(self, relative_path: str, root: Optional[Path] = None) -> Path:
         """获取文件完整路径"""
-        file_path = (Path(root) if root else self.resource_dir) / relative_path
-        if not file_path.exists():
+        base = (Path(root) if root else self.resource_dir).resolve()
+        file_path = (base / relative_path).resolve()
+        if not file_path.is_relative_to(base) or not file_path.exists():
             raise HTTPException(status_code=404, detail="文件不存在")
         return file_path
 

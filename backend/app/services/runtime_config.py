@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from threading import Lock
 from typing import List
 
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ settings = get_settings()
 
 LIBRARY_ROOT_KEY = "library_root"
 SCAN_ROOTS_KEY = "scan_roots"
+library_operation_lock = Lock()
 
 
 def get_library_root(db: Session) -> Path:
@@ -44,14 +46,15 @@ def get_scan_roots(db: Session) -> List[Path]:
     return [Path(item) for item in items if isinstance(item, str)]
 
 
-def set_scan_roots(db: Session, roots: List[Path]) -> None:
+def set_scan_roots(db: Session, roots: List[Path], *, commit: bool = True) -> None:
     value = json.dumps([str(item) for item in roots], ensure_ascii=False)
     row = db.query(AppConfig).filter(AppConfig.key == SCAN_ROOTS_KEY).first()
     if row:
         row.value = value
     else:
         db.add(AppConfig(key=SCAN_ROOTS_KEY, value=value))
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def host_path(root: Path) -> Path:

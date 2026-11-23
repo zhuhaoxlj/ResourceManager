@@ -9,6 +9,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.services.runtime_config import host_path
 from app.models.resource import Resource, Version
 from app.schemas.resource import ScanResult
 from app.services.apk_parser import parse_apk
@@ -261,42 +262,44 @@ class DirectoryScanner:
             )
 
     def index_file(
-        self, db: Session, file_path: Path, relative_path: str, root: Optional[Path] = None
+        self, db: Session, file_path: Path, relative_path: str, root: Optional[Path] = None,
+        *, platform_override: Optional[str] = None, size_override: Optional[int] = None,
+        name_override: Optional[str] = None
     ) -> str:
         """把一个文件登记到数据库，返回 created / updated。"""
         root = Path(root) if root else self.base_path
         filename = file_path.name
-        platform = self.detect_platform(filename)
+        db.flush()
+        existing_version = (
+            db.query(Version)
+            .filter(Version.file_path == relative_path, Version.root_path == str(root))
+            .first()
+        )
+        if existing_version is None and root == Path(settings.resource_dir).resolve():
+            existing_version = db.query(Version).filter_by(file_path=relative_path, root_path=None).first()
+        platform = platform_override or (
+            existing_version.resource.platform if existing_version else self.detect_platform(filename)
+        )
         if not platform:
             return "skipped"
 
-        # Session 关闭了 autoflush，先落盘上一轮的元数据，保证按包名查找/合并能查到
-        db.flush()
-        file_size = file_path.stat().st_size
+        file_size = file_path.stat().st_size if size_override is None else size_override
         ext = file_path.suffix.lower()
+        cache_key = relative_path if root == Path(settings.resource_dir).resolve() else str(file_path)
+        meta = None
+        if name_override is None and ext == ".apk" and platform == "android":
+            meta = self.apk_meta(file_path, cache_key)
+        elif name_override is None and ext == ".dmg" and platform == "mac":
+            meta = self.dmg_meta(file_path, cache_key)
 
-        meta: Optional[dict] = None
-        if ext == ".apk":
-            meta = self.apk_meta(file_path, relative_path)
-        elif ext == ".dmg":
-            meta = self.dmg_meta(file_path, relative_path)
-
-        # 提取信息（APK 优先用清单里的应用名/版本）
         version = self.extract_version(filename)
-        resource_name = self.extract_resource_name(filename, platform)
+        resource_name = name_override or self.extract_resource_name(filename, platform) or filename
         if meta:
             version = (meta.get("version_name") or version).strip() or version
             resource_name = (meta.get("label") or resource_name).strip() or resource_name
 
-        existing_version = (
-            db.query(Version)
-            .filter(
-                Version.file_path == relative_path,
-                or_(Version.root_path == str(root), Version.root_path.is_(None)),
-            )
-            .first()
-        )
-        resource = self._find_resource(db, platform, resource_name, meta, existing_version)
+        matching = existing_version if existing_version and existing_version.resource.platform == platform else None
+        resource = self._find_resource(db, platform, resource_name, meta, matching)
 
         status = "updated"
         if not resource:
@@ -315,6 +318,7 @@ class DirectoryScanner:
             old_resource_id = existing_version.resource_id
             existing_version.version = version
             existing_version.file_size = file_size
+            existing_version.root_path = str(root)
             if old_resource_id != resource.id:
                 db.query(Version).filter(Version.id == existing_version.id).update(
                     {Version.resource_id: resource.id}, synchronize_session=False
@@ -365,8 +369,12 @@ class DirectoryScanner:
         for extensions in settings.platform_extensions.values():
             all_extensions.update(extensions)
 
+        bundles = {
+            host_path(path) for version in db.query(Version)
+            if (path := Path(version.root_path or settings.resource_dir) / version.file_path).is_dir()
+        }
         for root in unique:
-            self._scan_root(db, root, all_extensions, result)
+            self._scan_root(db, root, all_extensions, result, bundles)
 
         try:
             db.commit()
@@ -378,10 +386,14 @@ class DirectoryScanner:
         return result
 
     def _scan_root(
-        self, db: Session, root: Path, all_extensions: Set[str], result: ScanResult
+        self, db: Session, root: Path, all_extensions: Set[str], result: ScanResult, bundles: Set[Path]
     ) -> None:
         for walk_root, dirs, files in os.walk(root):
-            dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS]
+            current = host_path(Path(walk_root))
+            if any(bundle == current or bundle in current.parents for bundle in bundles):
+                dirs.clear()
+                continue
+            dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS and not d.startswith(".")]
 
             for filename in files:
                 ext = Path(filename).suffix.lower()
@@ -389,6 +401,8 @@ class DirectoryScanner:
                     continue
 
                 file_path = Path(walk_root) / filename
+                if file_path.is_symlink():
+                    continue
                 result.scanned += 1
 
                 try:

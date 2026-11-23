@@ -1,9 +1,11 @@
 """资源路径管理：目录浏览、修改资源目录、把 NAS 上的文件导入（移动）到资源库。"""
 
+import errno
 import os
 import shutil
+from tempfile import mkdtemp
 from pathlib import Path
-from typing import Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -11,10 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.database import get_db
+from app.models.resource import Version
 from app.services.runtime_config import (
     get_library_root,
     get_scan_roots,
     host_path,
+    library_operation_lock,
     set_library_root,
     set_scan_roots,
 )
@@ -34,6 +38,11 @@ VOLUME_ROOTS = [
 
 class PathPayload(BaseModel):
     path: str
+
+
+class ImportPayload(PathPayload):
+    platform: str
+    mode: Literal["files", "folder"]
 
 
 def _is_within(child: Path, parent: Path) -> bool:
@@ -65,21 +74,6 @@ def _check_path(db: Session, raw: str) -> Path:
     if not any(_is_within(path, base) for base in _allowed_bases(db)):
         raise HTTPException(status_code=400, detail="只允许访问已挂载的 NAS 目录（/vol1、/vol2、/vol3）")
     return path
-
-
-def _supported_extensions() -> set[str]:
-    extensions: set[str] = set()
-    for values in settings.platform_extensions.values():
-        extensions.update(values)
-    return extensions
-
-
-def _detect_platform(filename: str) -> Optional[str]:
-    suffix = Path(filename).suffix.lower()
-    for platform, extensions in settings.platform_extensions.items():
-        if suffix in extensions:
-            return platform
-    return None
 
 
 def _storage_payload(db: Session) -> dict:
@@ -196,11 +190,7 @@ def update_library_root(payload: PathPayload, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="目录不可写")
 
     set_library_root(db, target)
-    return {
-        "library_root": str(target),
-        "library_root_host": str(host_path(target)),
-        "upload_template": f"{host_path(target)}/<平台>/",
-    }
+    return _storage_payload(db)
 
 
 def _writable(path: Path) -> bool:
@@ -208,55 +198,112 @@ def _writable(path: Path) -> bool:
 
 
 @router.post("/import")
-def import_from_path(payload: PathPayload, db: Session = Depends(get_db)):
-    """把 NAS 某个目录里的安装包移动到资源库对应平台目录，然后重新扫描。"""
+def import_from_path(payload: ImportPayload, db: Session = Depends(get_db)):
+    """移动整个目录。可逐文件登记，或把目录作为一条资源登记。"""
+    with library_operation_lock:
+        return _move_into_library(payload, db)
+
+
+def _move_into_library(payload: ImportPayload, db: Session):
+    if payload.platform not in settings.platforms:
+        raise HTTPException(status_code=400, detail="请选择有效的导入平台")
     source = _check_path(db, payload.path)
-    if not source.exists() or not source.is_dir():
-        raise HTTPException(status_code=400, detail="目录不存在")
-
     root = get_library_root(db).resolve()
-    if source == root or _is_within(source, root):
-        raise HTTPException(status_code=400, detail="该目录已在资源库内，直接扫描即可")
+    source_host = host_path(source).resolve()
+    root_host = host_path(root).resolve()
+    if not source.is_dir() or source in _allowed_bases(db):
+        raise HTTPException(status_code=400, detail="请选择 NAS 卷下的具体文件夹")
+    if _is_within(source_host, root_host) or _is_within(root_host, source_host):
+        raise HTTPException(status_code=400, detail="源目录和资源目录不能互相包含")
 
-    supported = _supported_extensions()
-    moved = 0
-    skipped = 0
-    errors: list[str] = []
+    target_dir = root / payload.platform.capitalize()
+    if target_dir.is_symlink():
+        raise HTTPException(status_code=400, detail="目标平台目录不能是符号链接")
+    try:
+        files = []
+        for item in source.rglob("*"):
+            if item.is_symlink() or not (item.is_file() or item.is_dir()):
+                raise HTTPException(status_code=400, detail=f"目录内含链接或特殊文件：{item.relative_to(source)}")
+            if item.is_file():
+                files.append((item.relative_to(source), item.stat().st_size))
+        if not files:
+            raise HTTPException(status_code=400, detail="所选目录没有文件")
 
-    for item in sorted(source.rglob("*")):
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for number in range(10_000):
+            target = target_dir / (source.name if number == 0 else f"{source.name} ({number})")
+            try:
+                target.mkdir()
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise HTTPException(status_code=409, detail="同名目录过多")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取源目录或创建目标目录：{exc}") from exc
+
+    scanner = DirectoryScanner(root)
+    created = updated = 0
+    renamed = False
+    staging = None
+    try:
         try:
-            if not item.is_file() or item.is_symlink():
-                continue
-            if item.suffix.lower() not in supported:
-                skipped += 1
-                continue
-            platform = _detect_platform(item.name)
-            if not platform:
-                skipped += 1
-                continue
+            source.rename(target)
+            renamed = True
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            staging = Path(mkdtemp(prefix=".resource-import-", dir=source.parent))
+            source.rename(staging / source.name)
+            shutil.copytree(staging / source.name, target, dirs_exist_ok=True, symlinks=True)
 
-            target_dir = root / platform.capitalize()
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target = target_dir / item.name
-            if target.exists():
-                target = target_dir / f"{item.stem}_{int(item.stat().st_mtime)}{item.suffix}"
+        # 已经原地登记的版本一并更新到移动后的路径，保留旧下载链接。
+        for version in db.query(Version):
+            old_root = Path(version.root_path or settings.resource_dir)
+            old_path = host_path(old_root / version.file_path)
+            if _is_within(old_path, source_host):
+                version.root_path = str(root)
+                version.file_path = str((target / old_path.relative_to(source_host)).relative_to(root))
+        db.flush()
+        entries = [(Path(), sum(size for _, size in files))] if payload.mode == "folder" else files
+        for relative, size in entries:
+            item = target / relative
+            status = scanner.index_file(
+                db, item, str(item.relative_to(root)), root, platform_override=payload.platform,
+                size_override=size, name_override=source.name if payload.mode == "folder" else None,
+            )
+            created += status == "created"
+            updated += status == "updated"
+        scan_roots = get_scan_roots(db)
+        remaining = [path for path in scan_roots if not _is_within(host_path(path).resolve(), source_host)]
+        if remaining != scan_roots:
+            set_scan_roots(db, remaining, commit=False)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            restore = staging / source.name if staging else None
+            if renamed:
+                restore = target
+            if restore and restore.exists():
+                if source.exists() or source.is_symlink():
+                    raise OSError(f"源目录已被占用，原文件位于 {host_path(restore)}")
+                restore.rename(source)
+            if staging:
+                staging.rmdir()
+            if not renamed:
+                shutil.rmtree(target)
+        except OSError as rollback_error:
+            raise HTTPException(status_code=500, detail=f"导入失败，文件可能仍在 {host_path(target)}：{rollback_error}") from exc
+        raise HTTPException(status_code=500, detail=f"导入失败，源文件已保留：{exc}") from exc
 
-            shutil.move(str(item), str(target))
-            moved += 1
-        except Exception as exc:  # noqa: BLE001 - 单个文件失败不影响其它文件
-            errors.append(f"{item.name}: {exc}")
-
-    scan_result = None
-    if moved:
-        scan_result = DirectoryScanner(root).scan_directory(db)
-
+    errors = []
+    if staging:
+        try:
+            shutil.rmtree(staging)
+        except OSError as exc:
+            errors.append(f"目标已入库，源文件暂存目录 {host_path(staging)} 清理未完成：{exc}")
     return {
-        "source": str(source),
-        "library_root": str(root),
-        "moved": moved,
-        "skipped": skipped,
-        "errors": errors[:10],
-        "scanned": scan_result.scanned if scan_result else 0,
-        "created": scan_result.created if scan_result else 0,
-        "updated": scan_result.updated if scan_result else 0,
+        "destination": str(host_path(target)), "moved": len(files),
+        "created": created, "updated": updated, "errors": errors,
     }

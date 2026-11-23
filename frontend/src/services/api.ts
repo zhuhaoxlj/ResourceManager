@@ -63,13 +63,12 @@ export interface BrowseResult {
   entries: BrowseEntry[]
 }
 
+export type ImportMode = "files" | "folder"
+
 export interface ImportResult {
-  source: string
-  library_root: string
+  destination: string
   moved: number
-  skipped: number
   errors: string[]
-  scanned: number
   created: number
   updated: number
 }
@@ -232,8 +231,8 @@ export const api = {
     return apiClient.delete("/storage/scan-roots", { params: { path } })
   },
 
-  importFromPath: (path: string): Promise<ImportResult> => {
-    return apiClient.post("/storage/import", { path })
+  importFromPath: (path: string, platform: string, mode: ImportMode): Promise<ImportResult> => {
+    return apiClient.post("/storage/import", { path, platform, mode })
   },
 
   // 扫描
