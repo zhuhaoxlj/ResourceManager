@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { useResourceStore } from "@/store/resourceStore"
 import { VersionList } from "@/components/VersionList"
@@ -18,6 +18,10 @@ export function ResourceDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { currentResource, loading, fetchResource, clearCurrentResource } = useResourceStore()
+  const [nameDraft, setNameDraft] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [editError, setEditError] = useState("")
+  const coverInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (id) {
@@ -27,6 +31,41 @@ export function ResourceDetail() {
       clearCurrentResource()
     }
   }, [id, fetchResource, clearCurrentResource])
+
+  const saveName = async () => {
+    if (!currentResource || nameDraft === null) return
+    const name = nameDraft.trim()
+    if (!name) {
+      setEditError("名称不能为空")
+      return
+    }
+    setSaving(true)
+    setEditError("")
+    try {
+      await api.updateResource(currentResource.id, { name })
+      setNameDraft(null)
+      await fetchResource(currentResource.id)
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "保存失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const uploadCover = async (file: File | undefined) => {
+    if (!currentResource || !file) return
+    setSaving(true)
+    setEditError("")
+    try {
+      await api.uploadCover(file, currentResource.id)
+      await fetchResource(currentResource.id)
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "上传封面失败")
+    } finally {
+      setSaving(false)
+      if (coverInput.current) coverInput.current.value = ""
+    }
+  }
 
   if (loading) {
     return (
@@ -141,12 +180,60 @@ export function ResourceDetail() {
 
           <div className="lg:col-span-2 space-y-6">
             <div>
-              <h1 className="text-3xl font-bold mb-2">{resource.name}</h1>
+              {nameDraft === null ? (
+                <h1 className="text-3xl font-bold mb-2">{resource.name}</h1>
+              ) : (
+                <form
+                  className="mb-2 flex flex-wrap items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void saveName()
+                  }}
+                >
+                  <label className="sr-only" htmlFor="resource-name">资源名称</label>
+                  <input
+                    id="resource-name"
+                    className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-xl font-semibold"
+                    value={nameDraft}
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    disabled={saving}
+                    autoFocus
+                  />
+                  <Button type="submit" size="sm" disabled={saving || !nameDraft.trim()}>保存</Button>
+                  <Button type="button" size="sm" variant="ghost" disabled={saving} onClick={() => { setNameDraft(null); setEditError("") }}>取消</Button>
+                </form>
+              )}
               <p className="text-muted-foreground">
                 {PLATFORM_LABELS[resource.platform] || resource.platform}
                 {resource.package_name ? ` · ${resource.package_name}` : ""}
                 {resource.architectures ? ` · ${resource.architectures.split(",").join("/")}` : ""}
               </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button variant="ghost" size="sm" disabled={saving} onClick={() => setNameDraft(resource.name)}>
+                  重命名
+                </Button>
+                <Button variant="ghost" size="sm" disabled={saving} onClick={() => coverInput.current?.click()}>
+                  上传封面
+                </Button>
+                <input
+                  ref={coverInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(event) => void uploadCover(event.target.files?.[0])}
+                />
+              </div>
+              {game && !game.title_id && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  未从文件或文件名识别到 Title ID，无法匹配商店资料。可以把文件名改成 <code>游戏名 [0100XXXXXXXXXXXX].xci</code>，或手动上传封面、重命名。
+                </p>
+              )}
+              {game?.title_id && !icon && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  商店目录里没有这个 Title ID 的封面，可以手动上传一张。
+                </p>
+              )}
+              {editError && <p role="alert" className="mt-2 text-sm text-destructive">{editError}</p>}
             </div>
 
             <div className="rounded-xl border bg-card">
