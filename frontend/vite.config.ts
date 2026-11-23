@@ -26,12 +26,16 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // 允许用域名/反代地址访问（飞牛远程访问会带自己的域名）
+    allowedHosts: true,
     proxy,
   },
   // vite preview 也走同样的反代，生产容器里前端和 API 同源
   preview: {
     host: "0.0.0.0",
     port: 5173,
+    // 飞牛远程访问的域名是动态的（*.5ddd.com），直接放开 Host 校验
+    allowedHosts: true,
     proxy,
   },
 })
