@@ -55,10 +55,19 @@ export function ResourceDetail() {
   const icon = api.assetUrl(resource.cover_image)
   const isAndroid = resource.platform === "android"
   const isMac = resource.platform === "mac"
+  const game = resource.switch_details
 
   const details = [
     { label: "平台", value: PLATFORM_LABELS[resource.platform] || resource.platform },
-    { label: "分类", value: resource.category || "未分类" },
+    { label: "分类", value: resource.category || (game?.genres.join("、") || "未分类") },
+    game && { label: "文件格式", value: game.format },
+    game?.title_id && { label: "Title ID", value: game.title_id, mono: true },
+    game?.kind && { label: "内容类型", value: { base: "本体", update: "更新补丁", DLC: "DLC" }[game.kind] },
+    game?.content_version != null && { label: "内容版本号", value: String(game.content_version) },
+    game?.publisher && { label: "发行商", value: game.publisher },
+    game?.developer && { label: "开发商", value: game.developer },
+    game?.release_date && { label: "发行日期", value: game.release_date },
+    game?.players && { label: "支持人数", value: `${game.players} 人` },
     resource.package_name && {
       label: isMac ? "Bundle ID" : "包名",
       value: resource.package_name,
@@ -109,7 +118,7 @@ export function ResourceDetail() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1">
-            <div className={`aspect-square rounded-2xl overflow-hidden ${icon && (isAndroid || isMac) ? "bg-white" : "bg-muted"}`}>
+            <div className={`${game ? "aspect-video" : "aspect-square"} rounded-2xl overflow-hidden ${icon && (isAndroid || isMac) ? "bg-white" : "bg-muted"}`}>
               {icon ? (
                 <img
                   src={icon}

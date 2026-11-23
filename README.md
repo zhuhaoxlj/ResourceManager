@@ -128,6 +128,19 @@ App_v2.0.0.apk         # 识别为 App v2.0.0
 - **目录扫描**：点击扫描按钮，自动识别新文件
 - **资源管理**：查看、编辑、删除资源
 
+### Switch 游戏资料
+
+Switch 页面读取 NSP、NSZ 和 XCI 的容器标识，并从 NSP/NSZ 的目录表或文件名识别 Title ID。XCI 可使用 `游戏名 [01007EF00011E000].xci` 格式补充识别信息。
+
+封面和商店资料来自 [TitleDB](https://github.com/blawar/titledb)。将地区 JSON 文件转换成索引后放入上传目录，页面即会加载。以下示例从项目根目录运行，后一个地区优先。
+
+```bash
+mkdir -p data/uploads
+docker compose exec -T backend python -m app.services.switch_metadata /tmp/US.en.json /tmp/HK.zh.json /app/uploads/switch-catalog.json
+```
+
+运行前将下载的 `US.en.json` 和 `HK.zh.json` 放到后端容器的 `/tmp`（例如使用 `docker compose cp US.en.json backend:/tmp/US.en.json`）。封面由浏览器从 Nintendo CDN 加载。
+
 ## API 接口
 
 ### 资源管理

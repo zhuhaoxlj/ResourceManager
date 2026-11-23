@@ -31,6 +31,7 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
   const icon = api.assetUrl(resource.cover_image)
   const isAndroid = resource.platform === "android"
   const isMac = resource.platform === "mac"
+  const isSwitch = resource.platform === "switch"
   const isAppIcon = !!icon && (isAndroid || isMac)
   const platformLabel =
     { android: "Android", mac: "macOS", windows: "Windows", switch: "Switch" }[resource.platform] ||
@@ -40,7 +41,7 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
   return (
     <Card className="group overflow-hidden transition-all hover:shadow-lg cursor-pointer">
       <div
-        className={`w-full overflow-hidden relative ${isAppIcon ? "h-40 sm:h-44 bg-white" : "aspect-square bg-muted"}`}
+        className={`w-full overflow-hidden relative ${isSwitch ? "aspect-video bg-muted" : isAppIcon ? "h-40 sm:h-44 bg-white" : "aspect-square bg-muted"}`}
         onClick={onClick}
       >
         {icon ? (
@@ -72,7 +73,9 @@ export function ResourceCard({ resource, onClick, onDownload }: ResourceCardProp
           {resource.name}
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-          {resource.category || (resource.package_name ? `${platformLabel} 应用` : "未分类")}
+          {resource.switch_details
+            ? [resource.switch_details.format, resource.switch_details.kind && { base: "本体", update: "更新补丁", DLC: "DLC" }[resource.switch_details.kind]].filter(Boolean).join(" · ")
+            : resource.category || (resource.package_name ? `${platformLabel} 应用` : "未分类")}
         </p>
         {latestVersion && (
           <p className="text-[11px] text-muted-foreground mt-1 truncate">

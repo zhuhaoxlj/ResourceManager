@@ -4,6 +4,19 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1"
 // 后端根地址（用于拼接静态资源，如 APK 图标）
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "")
 
+export interface SwitchDetails {
+  title_id?: string | null
+  format: string
+  kind?: "base" | "update" | "DLC" | null
+  content_version?: number | null
+  verified: boolean
+  publisher?: string | null
+  developer?: string | null
+  release_date?: string | null
+  players?: number | null
+  genres: string[]
+}
+
 export interface Resource {
   id: number
   name: string
@@ -19,6 +32,7 @@ export interface Resource {
   target_sdk?: string
   architectures?: string
   permissions_count?: number
+  switch_details?: SwitchDetails | null
   created_at: string
   updated_at?: string
   versions: Version[]

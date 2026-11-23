@@ -9,6 +9,7 @@ from app.models.database import get_db
 from app.models.resource import Resource, Version
 from app.core.config import settings
 from app.services.runtime_config import host_path
+from app.services.switch_metadata import read_switch_metadata
 from app.schemas.resource import (
     ResourceCreate,
     ResourceUpdate,
@@ -58,13 +59,20 @@ def _enrich_resource(resource: Resource) -> dict:
     app_version = resource.app_version
     if resource.platform in ("android", "mac") and versions:
         app_version = versions[0]["version"]
+    switch_details = None
+    if resource.platform == "switch" and versions:
+        current = versions[0]
+        root = Path(current["root_path"] or settings.resource_dir)
+        switch_details = read_switch_metadata(root, current["file_path"])
+    metadata = switch_details or {}
     return {
         "id": resource.id,
-        "name": resource.name,
+        "name": (metadata.get("name") or resource.name) if resource.name_source != "manual" else resource.name,
         "platform": resource.platform,
         "category": resource.category,
-        "description": resource.description,
-        "cover_image": resource.cover_image,
+        "description": resource.description or metadata.get("description"),
+        "cover_image": resource.cover_image or metadata.get("cover"),
+        "switch_details": switch_details,
         "package_name": resource.package_name,
         "app_version": app_version,
         "version_code": resource.version_code,

@@ -52,6 +52,19 @@ class ResourceUpdate(BaseModel):
     cover_image: Optional[str] = None
 
 
+class SwitchDetails(BaseModel):
+    title_id: str | None = None
+    format: str
+    kind: str | None = None
+    content_version: int | None = None
+    verified: bool
+    publisher: str | None = None
+    developer: str | None = None
+    release_date: str | None = None
+    players: int | None = None
+    genres: list[str]
+
+
 class ResourceResponse(ResourceBase):
     """资源响应"""
 
@@ -66,6 +79,7 @@ class ResourceResponse(ResourceBase):
     target_sdk: Optional[str] = Field(None, description="目标 Android SDK")
     architectures: Optional[str] = Field(None, description="支持的 CPU 架构")
     permissions_count: Optional[int] = Field(None, description="权限数量")
+    switch_details: SwitchDetails | None = None
     versions: list[VersionResponse] = []
 
     class Config:
