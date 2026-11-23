@@ -109,9 +109,17 @@ def add_scan_root(payload: PathPayload, db: Session = Depends(get_db)):
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=400, detail="目录不存在")
 
-    library_root = get_library_root(db).resolve()
-    if target == library_root or library_root in target.parents:
-        raise HTTPException(status_code=400, detail="该目录已在资源库内，无需重复添加")
+    # 资源库同时以容器路径和 NAS 路径挂载，两种写法都要识别
+    library_roots = {get_library_root(db)}
+    try:
+        library_roots.add(host_path(get_library_root(db)))
+    except Exception:
+        pass
+    try:
+        if any(target == item.resolve() or item.resolve() in target.parents for item in library_roots):
+            raise HTTPException(status_code=400, detail="该目录已在资源库内，无需重复添加")
+    except OSError:
+        raise HTTPException(status_code=400, detail="路径无效")
 
     roots = [item.resolve() for item in get_scan_roots(db)]
     if target in roots:
